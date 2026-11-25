@@ -437,6 +437,19 @@ function embedOne(url) {
         });
 }
 
+// The properties theme.update() accepts. Keeping only color_scheme used to
+// strip the alignment/tiling of a themed background image, so an installed
+// image theme came back looking like the plain default theme while its
+// color_scheme workaround was in place.
+const THEME_PROPERTY_KEYS = [
+    "additional_backgrounds_alignment",
+    "additional_backgrounds_tiling",
+    "color_scheme",
+    "content_color_scheme",
+    "ntp_background_alignment",
+    "ntp_background_tiling"
+];
+
 // Keep only the members theme.update() accepts.
 function sanitizeTheme(theme) {
     let clean = {};
@@ -447,10 +460,13 @@ function sanitizeTheme(theme) {
         clean.images = theme.images;
     }
     if (theme.properties && typeof theme.properties === "object") {
-        clean.properties = {
-            color_scheme: theme.properties.color_scheme,
-            content_color_scheme: theme.properties.content_color_scheme
-        };
+        let props = {};
+        THEME_PROPERTY_KEYS.forEach((key) => {
+            if (typeof theme.properties[key] !== "undefined") {
+                props[key] = cloneObject(theme.properties[key]);
+            }
+        });
+        clean.properties = props;
     }
     return clean;
 }

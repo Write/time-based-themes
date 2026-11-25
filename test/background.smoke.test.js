@@ -132,7 +132,7 @@ function run(options) {
         theme: {
             getCurrent() {
                 calls.getCurrentCount++;
-                return Promise.resolve({
+                return Promise.resolve(options.themeCurrent || {
                     colors: {frame: "#1c1b22", toolbar: "#1c1b22"},
                     images: {theme_ntp_background: "moz-extension://abc/ntp.png"},
                     properties: {color_scheme: "dark"}
@@ -713,4 +713,44 @@ test("system-theme mode never keeps a literal-scheme built-in theme active", asy
         "a literal-scheme theme must not be enabled in system-theme mode");
     assert.strictEqual(lastTheme(calls), "default-theme@mozilla.org",
         "the System theme is the only built-in one that follows the OS");
+});
+
+test("the color_scheme workaround keeps an image theme's artwork", async () => {
+    // A themed background image is positioned by additional_backgrounds_*
+    // properties. Keeping only color_scheme made the overlay paint the image
+    // with the default alignment, which reads as "it went dark but shows the
+    // default theme".
+    const sunsetTheme = {
+        colors: {frame: "#141b1e", toolbar: "#1c1b22", tab_background_text: "#c3c9cf"},
+        images: {additional_backgrounds: ["moz-extension://abc/sunset.svg"]},
+        properties: {
+            additional_backgrounds_alignment: ["right top"],
+            additional_backgrounds_tiling: ["no-repeat"],
+            color_scheme: "dark"
+        }
+    };
+    const {sandbox, storage, calls} = run({themeCurrent: sunsetTheme});
+    const noonMs = Date.now() - (Date.now() % 86400000);
+
+    await storage.api.set({
+        "autodarkchangeMode": {mode: "system-theme"},
+        "autodarkdaytimeTheme": {themeId: "my-day@x"},
+        "autodarknighttimeTheme": {themeId: "my-night@x"},
+        "autodarksystemDark": {check: true}
+    });
+
+    vm.runInContext("__fixedNow = " + (noonMs + 12 * 3600000) + "; Date.now = () => __fixedNow;", sandbox);
+    await vm.runInContext("init().then(() => switch_queue)", sandbox);
+
+    assert.ok(calls.themeUpdate.length >= 1, "theme.update() should be used for the workaround");
+    const overlay = calls.themeUpdate[calls.themeUpdate.length - 1];
+
+    assert.deepStrictEqual(overlay.properties.additional_backgrounds_alignment, ["right top"],
+        "the background alignment must survive the overlay");
+    assert.deepStrictEqual(overlay.properties.additional_backgrounds_tiling, ["no-repeat"],
+        "the background tiling must survive the overlay");
+    assert.deepStrictEqual(overlay.colors, sunsetTheme.colors,
+        "the theme's own colours must be repainted, not the default ones");
+    assert.strictEqual(overlay.images.additional_backgrounds[0], "data:image/png;base64,AAAA");
+    assert.strictEqual(overlay.properties.color_scheme, "system");
 });
