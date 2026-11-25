@@ -102,3 +102,31 @@ test("the options page loads the shared modules the background page uses", () =>
         assert.ok(html.includes(file), "options page should load " + file);
     });
 });
+
+test("build.sh injects the self-hosted update_url into the package", () => {
+    const build = read("build.sh");
+    const url = "https://git.drop.tf/Gliglue/time-based-themes/raw/branch/master/updates.json";
+    assert.match(build, /update_url/);
+    assert.ok(
+        build.includes(url),
+        "build.sh must default to the update manifest served by this repository"
+    );
+    // A self-distributed package is linted as such: the key is an error on a
+    // Mozilla-hosted submission only.
+    assert.match(build, /web-ext lint --self-hosted/);
+});
+
+test("updates.json names the version and the release asset of the signed xpi", () => {
+    const updates = JSON.parse(read("updates.json"));
+    const id = manifest.browser_specific_settings.gecko.id;
+    const entry = updates.addons[id].updates[0];
+    assert.strictEqual(entry.version, manifest.version);
+    assert.strictEqual(
+        entry.update_link,
+        `https://git.drop.tf/Gliglue/time-based-themes/releases/download/v${manifest.version}/automaticdark-${manifest.version}.xpi`
+    );
+    assert.strictEqual(
+        entry.applications.gecko.strict_min_version,
+        manifest.browser_specific_settings.gecko.strict_min_version
+    );
+});

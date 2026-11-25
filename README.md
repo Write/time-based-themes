@@ -84,17 +84,34 @@ addons.mozilla.org (unlisted, free) → host the signed file yourself.
 2. Download the signed XPI that AMO returns. Install it in Firefox via
    *Settings → Extensions → gear icon → Install Add-on From File…*, or serve it over HTTPS
    for other devices.
-3. Optional — automatic updates for your users:
+3. Automatic updates (this fork is distributed from
+   <https://git.drop.tf/Gliglue/time-based-themes>). The packaged manifest always carries
 
-   ```bash
-   ./tools/mkupdates.sh dist/automaticdark-2.0.1.xpi https://example.com/addons/
-   # paste the JSON into https://example.com/addons/updates.json
-   UPDATE_URL=https://example.com/addons/updates.json ./build.sh
+   ```
+   browser_specific_settings.gecko.update_url =
+       https://git.drop.tf/Gliglue/time-based-themes/raw/branch/master/updates.json
    ```
 
-   The `update_url` is written into the packaged manifest, so the shipped build points at
-   your server. Bump `version` in `manifest.json` for every release: the update manifest
-   compares versions.
+   which is what makes Firefox poll *this* repository instead of addons.mozilla.org. It
+   must be in the manifest Mozilla signs: the signature covers the manifest, and Firefox
+   keeps reading `update_url` from the version it installed, so the key cannot be added
+   afterwards. `./build.sh` refuses nothing but injects it (override with `UPDATE_URL=…`,
+   drop it with `NO_UPDATE_URL=1`), and lints the package with `web-ext lint --self-hosted`
+   because the key is an error on a Mozilla-hosted submission only.
+
+   After each signed release:
+
+   ```bash
+   ./tools/mkupdates.sh ~/Downloads/automaticdark-2.0.1.xpi   # writes updates.json + dist/updates.json
+   git add updates.json && git commit -m 'updates: 2.0.1' && git push drop master
+   ```
+
+   `updates.json` (repository root, default branch — that is what Firefox fetches) names the
+   version and points `update_link` at the release asset
+   `releases/download/v<version>/automaticdark-<version>.xpi`, i.e. the exact file Mozilla
+   signed; `update_hash` is the sha256 of that file. Attach the signed XPI to a release
+   tagged `v<version>` under that name, otherwise the update check 404s. Bump `version` in
+   `manifest.json` for every release: the update manifest compares versions.
 
 The add-on id lives in `manifest.json` → `browser_specific_settings.gecko.id`. Change it
 once, before the first signing, if you want your fork to be a separate add-on rather than

@@ -1,0 +1,17 @@
+{
+  "addons": {
+    "{eae8508f-68a5-4a0b-80fb-35c1675184dc}": {
+      "updates": [
+        {
+          "version": "2.0.0",
+          "update_link": "https://git.drop.tf/Gliglue/time-based-themes/releases/download/v2.0.0/automaticdark-2.0.0.xpi",
+          "applications": {
+            "gecko": {
+              "strict_min_version": "140.0"
+            }
+          }
+        }
+      ]
+    }
+  }
+}
