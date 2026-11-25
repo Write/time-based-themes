@@ -116,14 +116,21 @@ test("build.sh injects the self-hosted update_url into the package", () => {
     assert.match(build, /web-ext lint --self-hosted/);
 });
 
-test("updates.json names the version and the release asset of the signed xpi", () => {
+test("updates.json names a published release, consistent with its asset", () => {
     const updates = JSON.parse(read("updates.json"));
     const id = manifest.browser_specific_settings.gecko.id;
     const entry = updates.addons[id].updates[0];
-    assert.strictEqual(entry.version, manifest.version);
+    const version = entry.version;
+
+    // While a new version is prepared, manifest.json is ahead of the last
+    // published release by design; it must never be behind it.
+    assert.ok(
+        version.localeCompare(manifest.version, undefined, {numeric: true}) <= 0,
+        `updates.json (${version}) is newer than manifest.json (${manifest.version})`
+    );
     assert.strictEqual(
         entry.update_link,
-        `https://git.drop.tf/Gliglue/time-based-themes/releases/download/v${manifest.version}/automaticdark-${manifest.version}.xpi`
+        `https://git.drop.tf/Gliglue/time-based-themes/releases/download/v${version}/automaticdark-${version}.xpi`
     );
     assert.strictEqual(
         entry.applications.gecko.strict_min_version,

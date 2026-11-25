@@ -80,7 +80,11 @@ function run() {
         overrides: [],
         title: [],
         alarms: {},
-        getCurrentCount: 0
+        getCurrentCount: 0,
+        actionClicks: [],
+        menus: [],
+        menuCreated: [],
+        openOptions: 0
     };
 
     let enabledThemes = {};
@@ -144,10 +148,25 @@ function run() {
             }
         },
         browserAction: {
-            onClicked: {addListener() {}},
+            onClicked: {
+                addListener(fn) {
+                    calls.actionClicks.push(fn);
+                }
+            },
             setTitle(details) {
                 calls.title.push(details.title);
                 return Promise.resolve();
+            }
+        },
+        menus: {
+            create(details) {
+                calls.menuCreated.push(details);
+                return Promise.resolve(details.id);
+            },
+            onClicked: {
+                addListener(fn) {
+                    calls.menus.push(fn);
+                }
             }
         },
         windows: {
@@ -157,7 +176,9 @@ function run() {
         runtime: {
             onMessage: {addListener() {}},
             onInstalled: {addListener() {}},
-            openOptionsPage() {},
+            openOptionsPage() {
+                calls.openOptions++;
+            },
             sendMessage: () => Promise.resolve(true)
         },
         idle: {onStateChanged: {addListener() {}}}
@@ -359,4 +380,50 @@ test("the preview theme is reverted to the schedule afterwards", async () => {
     const last = calls.setEnabled[calls.setEnabled.length - 1];
     assert.deepStrictEqual(last, ["my-day@x", true],
         "after the preview the scheduled theme must be restored");
+});
+
+test("the toolbar button opens the settings page", async () => {
+    const {sandbox, calls} = run();
+
+    // The toolbar listeners are wired by setupEventHandlers(), the same entry
+    // point background.js uses.
+    vm.runInContext("setupEventHandlers()", sandbox);
+
+    assert.strictEqual(calls.actionClicks.length, 1,
+        "the background page should register exactly one toolbar click handler");
+
+    await calls.actionClicks[0]();
+
+    assert.strictEqual(calls.openOptions, 1,
+        "clicking the toolbar button must open the options page");
+});
+
+test("the toolbar menu keeps the day/night switch", async () => {
+    const {sandbox, storage, calls} = run();
+    const noonMs = Date.now() - (Date.now() % 86400000);
+
+    await storage.api.set({
+        "autodarkchangeMode": {mode: "manual-suntimes"},
+        "autodarkdaytimeTheme": {themeId: "my-day@x"},
+        "autodarknighttimeTheme": {themeId: "my-night@x"},
+        "autodarksunriseTime": {time: "08:00"},
+        "autodarksunsetTime": {time: "20:00"}
+    });
+
+    vm.runInContext("setupEventHandlers()", sandbox);
+    vm.runInContext("__fixedNow = " + (noonMs + 12 * 3600000) + "; Date.now = () => __fixedNow;", sandbox);
+    await vm.runInContext("init().then(() => switch_queue)", sandbox);
+
+    assert.strictEqual(calls.menuCreated.length, 1, "one toolbar menu item is created");
+    assert.strictEqual(Array.from(calls.menuCreated[0].contexts).join(","), "action",
+        "the item belongs to the toolbar button");
+    assert.strictEqual(calls.menus.length, 1, "the menu click handler is registered");
+
+    // The daytime theme is active at noon: the menu switches to night now.
+    calls.menus[0]({menuItemId: calls.menuCreated[0].id});
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const last = calls.setEnabled[calls.setEnabled.length - 1];
+    assert.deepStrictEqual(last, ["my-night@x", true],
+        "the menu override must switch to the nighttime theme immediately");
 });

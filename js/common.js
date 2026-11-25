@@ -38,6 +38,10 @@ const RANDOM_LAST_KEY = KEY_PREFIX + "randomLast"; // {ms, themeId, slot}
 const APPLY_ON_FOCUS_KEY = KEY_PREFIX + "applyOnFocus"; // {check}
 const SITE_OVERRIDES_KEY = KEY_PREFIX + "siteOverrides"; // {text}
 const SYSTEM_DARK_KEY = KEY_PREFIX + "systemDark"; // {check}
+
+// Context-menu item on the toolbar button (2.0.1): the plain click opens the
+// settings, the menu keeps the one-click day/night switch of issues #24 / #36.
+const MENU_TOGGLE = KEY_PREFIX + "-toggle-now";
 const LAST_MODE_KEY = KEY_PREFIX + "lastMode"; // {mode}
 
 const TICK_ALARM_NAME = KEY_PREFIX + "tick";
@@ -122,6 +126,7 @@ const caps = {
     management: typeof browser !== "undefined" && !!browser.management,
     browserSettings: typeof browser !== "undefined" && !!browser.browserSettings,
     browserAction: typeof browser !== "undefined" && !!browser.browserAction,
+    menus: typeof browser !== "undefined" && !!(browser.menus && browser.menus.create),
     windows: typeof browser !== "undefined" && !!browser.windows
 };
 
@@ -848,12 +853,49 @@ function updateToolbarTitle(slot) {
         return;
     }
     let text = slot === SLOT_DAY
-        ? "automaticDark: showing the daytime theme — click for the nighttime theme"
-        : "automaticDark: showing the nighttime theme — click for the daytime theme";
+        ? "automaticDark: daytime theme — click to open the settings"
+        : "automaticDark: nighttime theme — click to open the settings";
     let call = browser.browserAction.setTitle({ title: text });
     if (call && call.catch) {
         call.catch(() => {});
     }
+}
+
+// The toolbar button opens the settings page (2.0.1).
+function openSettings() {
+    logDebug("Toolbar button clicked: opening the settings page.");
+
+    let call = browser.runtime.openOptionsPage();
+    if (call && call.catch) {
+        call.catch(onError);
+    }
+    return Promise.resolve(true);
+}
+
+// Right-click on the toolbar button: switch day/night without opening a page.
+function setupToolbarMenu() {
+    if (!caps.menus) {
+        return;
+    }
+
+    let created = browser.menus.create({
+        id: MENU_TOGGLE,
+        title: "Switch to the other theme now",
+        contexts: ["action"]
+    });
+    if (created && created.catch) {
+        created.catch((error) => {
+            // A duplicate id only happens when the background page is
+            // re-evaluated; the existing item is still wired below.
+            logDebug("menus.create: " + error);
+        });
+    }
+
+    browser.menus.onClicked.addListener((info) => {
+        if (info.menuItemId === MENU_TOGGLE) {
+            toggleFromToolbar();
+        }
+    });
 }
 
 function toggleFromToolbar() {
@@ -1097,8 +1139,10 @@ if (browser.runtime && browser.runtime.onMessage) {
 }
 
 if (caps.browserAction) {
+    setupToolbarMenu();
+
     browser.browserAction.onClicked.addListener(() => {
-        toggleFromToolbar();
+        openSettings();
     });
 }
 }

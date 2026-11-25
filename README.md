@@ -8,9 +8,10 @@ routine, and the 38 open issues of the original project are addressed (see
 [Issue status](#issue-status) below). It keeps the original name, id-free options page and
 data model, so settings from 1.x still load.
 
-- Options page: `about:addons` → automaticDark → Preferences.
-- The toolbar button toggles the day/night theme manually; the icon tooltip shows which
-  slot is currently active.
+- Options page: `about:addons` → automaticDark → Preferences, or a plain click on the
+  toolbar button.
+- Right-click the toolbar button for *Switch to the other theme now* — a manual day/night
+  override that lasts until the next transition; the icon tooltip shows the active slot.
 - Nothing leaves your machine, no telemetry, no remote requests: see [PRIVACY.md](PRIVACY.md).
 
 ---
@@ -175,12 +176,12 @@ answered in the README or in the UI instead of the code.
 | [#49](https://github.com/skhzhang/time-based-themes/issues/49) | Choice of time-switch | **Fixed** — sunrise/sunset, manual times, system theme, plus arbitrary extra slots. |
 | [#48](https://github.com/skhzhang/time-based-themes/issues/48) | Firefox Color support | **Fixed** — paste a Firefox Color JSON as a custom day/night theme. |
 | [#47](https://github.com/skhzhang/time-based-themes/issues/47) | HMC Console Interface Web | **Documented** — the report describes an unrelated web console, not this extension; no code change was possible. |
-| [#46](https://github.com/skhzhang/time-based-themes/issues/46) | Theme switch | **Fixed** — toolbar toggle and extra slots cover switching on demand and on a schedule. |
+| [#46](https://github.com/skhzhang/time-based-themes/issues/46) | Theme switch | **Fixed** — the toolbar menu item and extra slots cover switching on demand and on a schedule. |
 | [#45](https://github.com/skhzhang/time-based-themes/issues/45) | System theme does not work on 1.4.1 | **Fixed** — same root cause as #43/#64. |
 | [#43](https://github.com/skhzhang/time-based-themes/issues/43) | System theme detection does not work | **Fixed** — OS state is read from the active theme and from `theme.onUpdated`. |
 | [#42](https://github.com/skhzhang/time-based-themes/issues/42) | System theme not working on Ubuntu | **Fixed** — detection no longer depends on a `storage.onChanged` event that never fired. |
 | [#37](https://github.com/skhzhang/time-based-themes/issues/37) | Personal data collection policy | **Fixed** — [PRIVACY.md](PRIVACY.md) and `data_collection_permissions: none`. |
-| [#36](https://github.com/skhzhang/time-based-themes/issues/36) | Toolbar toggle for a temporary override | **Fixed** — click toggles day/night until the next transition. |
+| [#36](https://github.com/skhzhang/time-based-themes/issues/36) | Toolbar toggle for a temporary override | **Fixed** — *Switch to the other theme now* in the toolbar button's context menu; it lasts until the next transition (2.0.1 keeps the plain click for the settings). |
 | [#30](https://github.com/skhzhang/time-based-themes/issues/30) | Override web page colour scheme | **Fixed** — per-slot *always light / always dark / follow theme*. |
 | [#29](https://github.com/skhzhang/time-based-themes/issues/29) | Thunderbird support | **Documented** — Thunderbird's theme API is incompatible; out of scope for this package. |
 | [#28](https://github.com/skhzhang/time-based-themes/issues/28) | Offset in automatic mode | **Fixed** — offsets apply to computed sun times too. |
