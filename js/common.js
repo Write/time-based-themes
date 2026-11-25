@@ -699,6 +699,17 @@ function ensureColorSchemeSystem(themeId) {
                 setOverlayOwner(null);
                 return;
             }
+            // A theme that declares no colour scheme at all already makes the
+            // media query follow the OS, so the overlay buys nothing — and
+            // theme.update() REPLACES the enabled theme, which is how a working
+            // switch ended up painting the built-in "Par défaut" theme instead
+            // of the user's (report at 18:32:12: apply night, enabled theme
+            // default, color_scheme null).
+            if (!current.properties || !current.properties.color_scheme) {
+                setOverlayOwner(null);
+                debugLog("overlay", "skipped: theme declares no color_scheme");
+                return;
+            }
 
             let theme = sanitizeTheme(cloneObject(current));
             theme.properties = theme.properties || {};

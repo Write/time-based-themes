@@ -791,7 +791,10 @@ function renderDiagnostics() {
         lines.push("nightTheme: " + JSON.stringify(storage["autodarknighttimeTheme"]));
         lines.push("dayScheme: " + JSON.stringify(storage["autodarkdayScheme"]));
         lines.push("nightScheme: " + JSON.stringify(storage["autodarknightScheme"]));
-        lines.push("startupOnly: " + JSON.stringify(storage["autodarkstartupOnly"]));
+        let startupOnly = storage["autodarkcheckTimeStartupOnly"];
+        lines.push("startupOnly: "
+            + JSON.stringify(startupOnly && typeof startupOnly.check === "boolean"
+                ? startupOnly.check : false) + " (stored: " + JSON.stringify(startupOnly) + ")");
         let poll = storage["autodarkpollBeats"] || {};
         lines.push("poll beats (2s OS poll, written every 10): " + JSON.stringify(poll.count)
             + (poll.at ? " last at " + poll.at : ""));
