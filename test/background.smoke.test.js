@@ -86,10 +86,19 @@ function run(options) {
         menus: [],
         menuCreated: [],
         messageListeners: [],
-        openOptions: 0
+        openOptions: 0,
+        setMediaDark(value, fire) {
+            media.matches = !!value;
+            if (fire !== false) {
+                media.listeners.slice().forEach((fn) => fn());
+            }
+        }
     };
 
     let enabledThemes = {};
+    // The OS scheme as the browser reports it to media queries. Tests move it
+    // with calls.setMediaDark() to simulate a real system appearance switch.
+    let media = {matches: !!options.mediaDark, listeners: []};
 
     const browser = {
         storage: {local: storage.api, onChanged: storage.onChanged},
@@ -236,9 +245,15 @@ function run(options) {
         FileReader: FileReaderStub,
         window: {
             matchMedia: () => ({
-                matches: !!options.mediaDark,
-                addEventListener() {},
-                addListener() {}
+                get matches() {
+                    return media.matches;
+                },
+                addEventListener(kind, fn) {
+                    media.listeners.push(fn);
+                },
+                addListener(fn) {
+                    media.listeners.push(fn);
+                }
             })
         },
         URL: URL,
@@ -527,7 +542,9 @@ test("a content script report flips the theme without waiting for an alarm", asy
     // background.js wires the message listener through setupEventHandlers().
     vm.runInContext("setupEventHandlers()", sandbox);
 
-    // The user switches the OS to dark: every open page reports it.
+    // The user switches the OS to dark: the browser updates the media query and
+    // every open page reports it.
+    calls.setMediaDark(true, false);
     const listener = calls.messageListeners[0];
     assert.ok(listener, "the background must listen for content script messages");
     await listener({type: "autodark-scheme", dark: true});
@@ -557,6 +574,23 @@ test("a reload corrects a stale stored OS scheme", async () => {
 // The stored scheme is a hint, not the truth: a restart must re-read the OS.
 // (Keeping the stored value regardless is what made a reload during the night
 // come back on the daytime theme.)
+// The media query is authoritative in system-theme mode, so any tick re-reads
+// it. Detection therefore never depends on a web page being open and firing a
+// change event — that dependency is what made it look random.
+test("a plain periodic tick re-reads the OS scheme", async () => {
+    const {sandbox, storage, calls} = run();
+    await systemSettings(storage, {"autodarksystemDark": {check: false}});
+    await vm.runInContext("init().then(() => switch_queue)", sandbox);
+    assert.strictEqual(lastTheme(calls), "my-day@x");
+
+    // The user switched the system to dark; no page reported anything.
+    calls.setMediaDark(true, false);
+    await vm.runInContext("tick(\"alarm\").then(() => switch_queue)", sandbox);
+
+    assert.strictEqual(lastTheme(calls), "my-night@x",
+        "a scheduled tick must notice the OS switch on its own");
+});
+
 test("a cold start follows the live OS scheme, not the stored one", async () => {
     const {sandbox, storage, calls} = run();
     await systemSettings(storage, {"autodarksystemDark": {check: true}});

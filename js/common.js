@@ -1064,23 +1064,16 @@ function handleSchemeReport(dark, reason) {
 const background_scheme_query = window.matchMedia("(prefers-color-scheme: dark)");
 
 function syncSystemDarkFromBackground(mode, reason) {
-    if (mode !== "system-theme" || osReportsBlocked()) {
+    if (mode !== "system-theme") {
         return;
     }
-    // On a cold start (extension reload, browser restart, wake from sleep) the
-    // stored value describes the *previous* run. Trusting it is why reloading
-    // the extension kept the wrong slot until a page happened to report: the
-    // live query is the OS, the stored value is history. In system-theme mode
-    // the theme we keep active declares color_scheme "system", so this query
-    // follows the OS even though it reads the browser theme.
-    // Cold-start reasons only: "os-change" is deliberately excluded, its value
-    // comes from a page that read the OS in the content process and must not be
-    // undone by a media query that has not caught up yet.
-    let startup = system_dark === null
-        || reason === "startup" || reason === "install" || reason === "focus";
-    if (!startup) {
-        return;
-    }
+    // In system-theme mode this query is the OS: either the theme we keep
+    // active declares color_scheme "system", or we painted an overlay that
+    // does. Trusting it on *every* tick is what makes detection reliable —
+    // depending on a page to report made it look random, because it only
+    // worked when a web page happened to be open and happened to fire its
+    // change event (extension event page may be asleep, options page runs no
+    // content script, about: pages have none at all).
     let live = background_scheme_query.matches;
     if (live !== system_dark) {
         recordSystemDark(live, "background media query on " + reason);
@@ -1468,8 +1461,9 @@ function setupEventHandlers() {
             DEBUG_MODE = boolSetting(obj, DEBUG_MODE_KEY, DEFAULT_DEBUG_MODE);
         }, onError);
 
-    // Firefox does not always deliver the change event for this query, but when
-    // it does it is the cheapest OS switch signal there is.
+    // Firefox does not always deliver the change event for this query, but in
+    // system-theme mode its value is the OS (see syncSystemDarkFromBackground),
+    // so a change is believed immediately instead of waiting for a page.
     if (typeof background_scheme_query.addEventListener === "function") {
         background_scheme_query.addEventListener("change", () => {
             getSettings().then((s) => {
@@ -1478,14 +1472,7 @@ function setupEventHandlers() {
                 }
                 logDebug("Background media query changed to "
                     + (background_scheme_query.matches ? "dark" : "light"));
-                if (osReportsBlocked()) {
-                    logDebug("background media query report ignored: too many flips recently.");
-                    return;
-                }
-                // The query follows the browser theme, so it reports whatever
-                // our own theme declares; handleSchemeReport only asks for a
-                // confirmation when the value is ambiguous.
-                handleSchemeReport(background_scheme_query.matches, "media query")
+                recordSystemDark(background_scheme_query.matches, "media query change")
                     .then((moved) => {
                         if (moved) {
                             queueTick("os-change");
