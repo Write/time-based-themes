@@ -769,7 +769,7 @@ function renderDiagnostics() {
             ? browser.theme.getCurrent().catch((e) => ({error: String(e)}))
             : Promise.resolve(null),
         browser.browserSettings && browser.browserSettings.overrideContentColorScheme
-            ? browser.browserSettings.overrideContentColorScheme.get()
+            ? browser.browserSettings.overrideContentColorScheme.get({})
                 .catch((e) => ({error: String(e)}))
             : Promise.resolve(null),
         browser.management && browser.management.getAll

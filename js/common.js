@@ -406,6 +406,25 @@ function embedOne(url) {
             }
             return response.blob();
         })
+        .then((blob) => {
+            // A theme background can be an SVG that already inlines a raster
+            // image. Turning it into a data: URL nests one giant data: URL in
+            // another and theme.update() rejects the whole update ("Error
+            // processing images.additional_backgrounds.0"), which killed the
+            // color_scheme workaround on themes built that way.
+            if (blob.type !== "image/svg+xml") {
+                return blob;
+            }
+            return blob.text().then((text) => (text.indexOf("data:image/") !== -1
+                ? null : blob));
+        })
+        .then((blob) => {
+            if (blob === null) {
+                logDebug("embedOne: dropping nested-image SVG " + url);
+                throw new Error("nested data: URL");
+            }
+            return blob;
+        })
         .then((blob) => new Promise((resolve, reject) => {
             let reader = new FileReader();
             reader.onloadend = () => resolve(reader.result);
@@ -541,8 +560,15 @@ function ensureColorSchemeSystem() {
 
             return embedThemeImages(theme).then((ready) => {
                 overlay_applied = true;
-                return browser.theme.update(ready).then(() => {
-                    logDebug("Applied color_scheme workaround.");
+                return browser.theme.update(ready).catch((error) => {
+                    // Some artwork cannot be re-sent at all. The overlay exists
+                    // for color_scheme: "system", not for the images, so retry
+                    // with the colours alone rather than losing the fix.
+                    logDebug("color_scheme workaround rejected the artwork ("
+                        + error + "), retrying without images.");
+                    delete ready.images;
+                    return browser.theme.update(ready)
+                        .then(() => logDebug("Applied color_scheme workaround (colors only)."));
                 });
             });
         })
