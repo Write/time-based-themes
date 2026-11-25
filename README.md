@@ -3,7 +3,7 @@
 Automatically switch your Firefox theme at sunrise and sunset, at times you choose, or
 together with your operating system's light/dark mode.
 
-This is the 2.0.0 branch: the extension was rewritten around a single scheduling
+This fork ships the 2.0.x line (currently 2.0.14): the extension was rewritten around a single scheduling
 routine, and the 38 open issues of the original project are addressed (see
 [Issue status](#issue-status) below). It keeps the original name, id-free options page and
 data model, so settings from 1.x still load.
@@ -76,10 +76,10 @@ Firefox only installs signed add-ons permanently, so the flow is: build → sign
 addons.mozilla.org (unlisted, free) → host the signed file yourself.
 
 ```bash
-./build.sh                     # tests + lint + dist/automaticdark-2.0.0.{xpi,zip}
+./build.sh                     # tests + lint + dist/automaticdark-<version>.{xpi,zip}
 ```
 
-1. Upload `dist/automaticdark-2.0.0.zip` at <https://addons.mozilla.org/developers/> →
+1. Upload `dist/automaticdark-<version>.zip` at <https://addons.mozilla.org/developers/> →
    *Submit a new add-on* → **On your own** (self-distribution). First submission can take
    a review cycle; subsequent versions are usually signed automatically.
 2. Download the signed XPI that AMO returns. Install it in Firefox via
@@ -103,8 +103,8 @@ addons.mozilla.org (unlisted, free) → host the signed file yourself.
    After each signed release:
 
    ```bash
-   ./tools/mkupdates.sh ~/Downloads/automaticdark-2.0.1.xpi   # writes updates.json + dist/updates.json
-   git add updates.json && git commit -m 'updates: 2.0.1' && git push drop master
+   ./tools/mkupdates.sh ~/Downloads/automaticdark-<version>.xpi   # writes updates.json + dist/updates.json
+   git add updates.json && git commit -m 'updates: <version>' && git push drop HEAD:master
    ```
 
    `updates.json` (repository root, default branch — that is what Firefox fetches) names the
