@@ -778,13 +778,18 @@ function ensurePainted(themeId) {
     if (BUILT_IN_THEME_IDS.indexOf(themeId) !== -1) {
         return Promise.resolve();
     }
-    return browser.theme.getCurrent()
-        .then((current) => {
+    // Ask which theme is enabled, not whether *a* theme is painted: after
+    // theme.reset() Firefox paints the default theme, which has colours of its
+    // own, so "some colours are on screen" answered yes while the theme the
+    // user picked was not on screen at all.
+    return Promise.all([browser.theme.getCurrent(), enabledThemeId()])
+        .then(([current, enabled]) => {
             debugLog("painted", (current && current.colors ? "colours" : "nothing")
                 + " name=" + JSON.stringify(current && current.name)
+                + " enabled=" + enabled
                 + " scheme=" + JSON.stringify(current && current.properties
                     && current.properties.color_scheme));
-            if (current && current.colors) {
+            if (enabled === themeId) {
                 repaint_attempted_theme = null;
                 return;
             }
@@ -818,11 +823,16 @@ function applyCustomTheme(spec, mode) {
 
     // A dynamic theme overlays the enabled static theme; reset first so the
     // previous theme's artwork does not bleed through.
+    //
+    // The user's own JSON is passed through untouched: inlining images into
+    // data: URLs made theme.update() reject the whole theme
+    // ("images.additional_backgrounds.0 ... must either match
+    // imageDataOrStrictRelativeUrl"), so a custom theme with an SVG background
+    // could never be applied at all.
     return resetOverlay()
-        .then(() => embedThemeImages(theme))
-        .then((ready) => {
+        .then(() => {
             overlay_applied = true;
-            return browser.theme.update(ready);
+            return browser.theme.update(theme);
         })
         .catch(onError);
 }
@@ -936,45 +946,48 @@ function applyThemeId(themeId, mode, themeKey, s) {
         return withTimeout(applyCustomTheme(spec, mode), "theme.update (custom)");
     }
 
-    // Drop any overlay before enabling the static theme: a leftover one — from
-    // this session or from before the background page restarted — hides the
-    // theme we are about to enable, and the color_scheme snapshot would then be
-    // taken from that stale overlay. `overlay_applied` cannot be trusted for
-    // this, so ask the browser what is painted.
-    // Rebuilding the overlay on every tick churns the paint (and the media query
-    // the OS signal comes from), so an overlay that already shows this theme is
-    // left alone; anything else is dropped first, because a leftover overlay
-    // hides the theme we are about to enable.
-    let guard = (promise, label) => withTimeout(promise, label);
+    // Enabling a static theme is one decision: exactly one theme must be the
+    // enabled one. Everything else that used to happen here — dropping an
+    // overlay with theme.reset(), rebuilding it with theme.update(), guessing
+    // the paint from theme.getCurrent().colors — was machinery that could only
+    // mis-report: theme.reset() repaints the default theme (Firefox bug
+    // 1415267) and the default theme has colours, so "a theme with colours is
+    // on screen" was true while the user's theme was not on screen at all.
+    return applyStaticTheme(spec.id);
+}
 
-    return guard(overlayOwner(), "theme.getCurrent").then((owner) => {
-        if (mode === "system-theme" && owner === spec.id) {
-            logDebug("applyThemeId: overlay for " + spec.id + " already in place.");
-            return;
+// Make `themeId` the one enabled theme, and check it rather than assume it.
+function applyStaticTheme(themeId) {
+    return enabledThemeId().then((actual) => {
+        if (actual === themeId) {
+            pushEvent("apply", "already enabled " + themeId);
+            return true;
         }
-        let droppedOverlay = false;
-        return guard(overlayLooksActive(), "theme.getCurrent (overlay)").then((overlay) => {
-            droppedOverlay = !!(mode === "system-theme" && overlay);
-            return guard(resetOverlay(droppedOverlay), "theme.reset");
-        })
-            .then(() => guard(enableInstalledTheme(spec.id, mode), "management.setEnabled"))
-            .then(() => {
-                if (!droppedOverlay) {
-                    return undefined;
+        debugLog("apply", "enabling " + themeId + " (was " + actual + ")");
+        return withTimeout(browser.management.setEnabled(themeId, true), "management.setEnabled")
+            .then(() => enabledThemeId())
+            .then((after) => {
+                if (after === themeId) {
+                    pushEvent("apply", "enabled " + themeId);
+                    return true;
                 }
-                // The overlay was dropped, so the theme now paints with
-                // whatever color_scheme it declares — a literal one pins every
-                // page to it and the OS signal disappears ("it does not toggle
-                // any more on a system-wide colour scheme change"). Repaint the
-                // theme, then rebuild the workaround on top of it: dropping the
-                // overlay without rebuilding it silently disables system-theme
-                // following.
-                return guard(ensurePainted(spec.id), "theme.update")
-                    .then(() => (mode === "system-theme"
-                        ? guard(ensureColorSchemeSystem(spec.id), "theme.update (overlay)")
-                        : undefined));
-            })
-            .then(() => verifyEnabled(spec.id, "apply"));
+                // management said yes, the browser holds something else: the
+                // known "enabled but not painted" state. A single disable/enable
+                // cycle is the only way to force a real repaint.
+                pushEvent("apply", "not in effect (" + after + "), toggling " + themeId);
+                return withTimeout(browser.management.setEnabled(themeId, false),
+                    "management.setEnabled")
+                    .then(() => withTimeout(browser.management.setEnabled(themeId, true),
+                        "management.setEnabled"))
+                    .then(() => enabledThemeId())
+                    .then((again) => {
+                        pushEvent("apply", "after toggle " + again);
+                        return again === themeId;
+                    });
+            });
+    }).catch((error) => {
+        pushEvent("apply", "failed " + themeId + ": " + (error && error.message));
+        throw error;
     });
 }
 

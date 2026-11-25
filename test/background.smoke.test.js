@@ -383,30 +383,6 @@ test("withTimeout rejects with the stuck call's name", async () => {
     assert.strictEqual(message, "timeout after 15ms: theme.update");
 });
 
-test("system-theme mode keeps the OS signal observable with images inlined", async () => {
-    const {sandbox, storage, calls} = run({mediaDark: true});
-    const noonMs = Date.now() - (Date.now() % 86400000);
-
-    await storage.api.set({
-        "autodarkchangeMode": {mode: "system-theme"},
-        "autodarkdaytimeTheme": {themeId: "my-day@x"},
-        "autodarknighttimeTheme": {themeId: "my-night@x"},
-        "autodarksystemDark": {check: true}
-    });
-
-    vm.runInContext("__fixedNow = " + (noonMs + 12 * 3600000) + "; Date.now = () => __fixedNow;", sandbox);
-    await vm.runInContext("init().then(() => switch_queue)", sandbox);
-
-    // The night theme is enabled and the color_scheme workaround is applied.
-    assert.ok(calls.setEnabled.some(([id, on]) => id === "my-night@x" && on === true));
-    assert.ok(calls.themeUpdate.length >= 1, "theme.update() should be used for the workaround");
-
-    const overlay = calls.themeUpdate[calls.themeUpdate.length - 1];
-    assert.strictEqual(overlay.properties.color_scheme, "system");
-    assert.strictEqual(overlay.images.theme_ntp_background, "data:image/png;base64,AAAA",
-        "moz-extension:// images must be inlined before theme.update()");
-    assert.deepStrictEqual(calls.overrides.slice(-1), ["system"]);
-});
 
 test("an explicit light scheme wins during the night", async () => {
     const {sandbox, storage, calls} = run();
@@ -857,21 +833,15 @@ test("system-theme mode never keeps a literal-scheme built-in theme active", asy
         "the System theme is the only built-in one that follows the OS");
 });
 
-test("the color_scheme workaround keeps an image theme's artwork", async () => {
-    // A themed background image is positioned by additional_backgrounds_*
-    // properties. Keeping only color_scheme made the overlay paint the image
-    // with the default alignment, which reads as "it went dark but shows the
-    // default theme".
-    const sunsetTheme = {
-        colors: {frame: "#141b1e", toolbar: "#1c1b22", tab_background_text: "#c3c9cf"},
-        images: {additional_backgrounds: ["moz-extension://abc/sunset.svg"]},
-        properties: {
-            additional_backgrounds_alignment: ["right top"],
-            additional_backgrounds_tiling: ["no-repeat"],
-            color_scheme: "dark"
-        }
-    };
-    const {sandbox, storage, calls} = run({themeCurrent: sunsetTheme});
+
+
+
+// Applying a static theme is one decision: exactly one theme enabled, verified.
+// No overlay, no theme.reset(): theme.update() replaces the enabled theme and
+// theme.reset() repaints the default one, and both made a working switch paint
+// something else than the theme the user picked.
+test("applying a static theme never paints an overlay", async () => {
+    const {sandbox, storage, calls} = run({mediaDark: true});
     const noonMs = Date.now() - (Date.now() % 86400000);
 
     await storage.api.set({
@@ -884,99 +854,65 @@ test("the color_scheme workaround keeps an image theme's artwork", async () => {
     vm.runInContext("__fixedNow = " + (noonMs + 12 * 3600000) + "; Date.now = () => __fixedNow;", sandbox);
     await vm.runInContext("init().then(() => switch_queue)", sandbox);
 
-    assert.ok(calls.themeUpdate.length >= 1, "theme.update() should be used for the workaround");
-    const overlay = calls.themeUpdate[calls.themeUpdate.length - 1];
-
-    assert.deepStrictEqual(overlay.properties.additional_backgrounds_alignment, ["right top"],
-        "the background alignment must survive the overlay");
-    assert.deepStrictEqual(overlay.properties.additional_backgrounds_tiling, ["no-repeat"],
-        "the background tiling must survive the overlay");
-    assert.deepStrictEqual(overlay.colors, sunsetTheme.colors,
-        "the theme's own colours must be repainted, not the default ones");
-    assert.strictEqual(overlay.images.additional_backgrounds[0], "data:image/png;base64,AAAA");
-    assert.strictEqual(overlay.properties.color_scheme, "system");
+    assert.strictEqual(calls.themeUpdate.length, 0,
+        "no theme.update() overlay: it replaces the enabled theme");
+    assert.strictEqual(calls.themeReset, 0,
+        "no theme.reset(): it repaints the default theme");
+    assert.strictEqual(lastTheme(calls), "my-night@x", "the night theme is the enabled one");
 });
 
-test("the workaround is rebuilt after a stale overlay is dropped", async () => {
-    // Dropping a leftover overlay is only half the job. After theme.reset() the
-    // default theme paints, which reports no colours; the theme then paints with
-    // whatever color_scheme it declares, a literal one pins every page to it and
-    // the OS signal disappears ("it does not toggle any more on a system-wide
-    // colour scheme change"). The overlay has to be rebuilt once it is painted.
-    const staleOverlay = {
-        colors: {frame: "#000000", toolbar: "#000000"},
-        properties: {color_scheme: "system"}
-    };
-    const nightTheme = {
-        colors: {frame: "#141b1e", toolbar: "#1c1b22"},
-        properties: {color_scheme: "dark"}
-    };
-    let harness;
-    const h = run({
-        getCurrent: () => {
-            if (harness.calls.themeReset === 0) {
-                return staleOverlay;
-            }
-            // After the reset the default theme paints: no colours at all until
-            // the repaint re-enables the theme (bug 1415267).
-            return harness.calls.setEnabled.length > 1 ? nightTheme : {};
-        }
-    });
-    harness = h;
-    const {sandbox, storage, calls} = h;
-
-    await storage.api.set({
-        "autodarkchangeMode": {mode: "system-theme"},
-        "autodarkdaytimeTheme": {themeId: "my-day@x"},
-        "autodarknighttimeTheme": {themeId: "my-night@x"},
-        "autodarksystemDark": {check: true}
-    });
-    // The theme is already enabled (a background restart keeps it), and an
-    // overlay from the previous session is still painted.
+test("a theme that is already the enabled one is left alone", async () => {
+    const {sandbox, calls} = run();
     await vm.runInContext("browser.management.setEnabled('my-night@x', true)", sandbox);
-    vm.runInContext("last_applied = {}; overlay_applied = false;", sandbox);
+    calls.setEnabled.length = 0;
 
-    await vm.runInContext(
-        'applyThemeId("my-night@x", "system-theme", "autodarknighttimeTheme", {})', sandbox);
+    const ok = await vm.runInContext('applyStaticTheme("my-night@x")', sandbox);
 
-    assert.ok(calls.themeReset >= 1, "the stale overlay must be dropped first");
-    assert.ok(calls.setEnabled.length >= 2,
-        "the theme must be repainted before the overlay is rebuilt");
-    const overlay = calls.themeUpdate[calls.themeUpdate.length - 1];
-    assert.ok(overlay, "the workaround must be rebuilt after the repaint");
-    assert.deepStrictEqual(overlay.colors, nightTheme.colors,
-        "the rebuilt overlay must carry the painted theme's colours");
-    assert.strictEqual(overlay.properties.color_scheme, "system",
-        "the rebuilt overlay must make pages follow the OS again");
+    assert.strictEqual(ok, true);
+    assert.strictEqual(calls.setEnabled.length, 0,
+        "re-enabling an enabled theme is the churn that broke Firefox's DRM checkbox");
 });
 
-test("the overlay waits until the new theme is painted", async () => {
-    // Called too early, theme.getCurrent() still reports the previous theme and
-    // the overlay repaints those old colours in the new slot.
-    const night = {
-        colors: {frame: "#141b1e", toolbar: "#1c1b22"},
-        properties: {color_scheme: "dark"}
-    };
-    const {sandbox, storage, calls} = run({
-        mediaDark: true,
-        getCurrent: (count) => (count <= 2 ? {} : night)
-    });
-    const noonMs = Date.now() - (Date.now() % 86400000);
+test("a theme that is enabled but not in effect is toggled once", async () => {
+    // Firefox can report a theme as enabled while the default theme is what is
+    // actually painted (bug 1415267). A single disable/enable cycle is the fix,
+    // and it has to be decided from the enabled theme, not from getCurrent().
+    const {sandbox, calls} = run();
+    vm.runInContext(`__attempts = [];
+        browser.management.setEnabled = (id, on) => {
+            __attempts.push([id, on]);
+            return Promise.resolve();
+        };`, sandbox);
 
-    await storage.api.set({
-        "autodarkchangeMode": {mode: "system-theme"},
-        "autodarkdaytimeTheme": {themeId: "my-day@x"},
-        "autodarknighttimeTheme": {themeId: "my-night@x"},
-        "autodarksystemDark": {check: true}
-    });
+    const ok = await vm.runInContext('applyStaticTheme("my-night@x")', sandbox);
+    const attempts = vm.runInContext("__attempts", sandbox);
 
-    vm.runInContext("__fixedNow = " + (noonMs + 12 * 3600000) + "; Date.now = () => __fixedNow;", sandbox);
-    await vm.runInContext("init().then(() => switch_queue)", sandbox);
+    assert.strictEqual(ok, false, "the theme never became the enabled one");
+    assert.strictEqual(JSON.stringify(attempts),
+        JSON.stringify([["my-night@x", true], ["my-night@x", false], ["my-night@x", true]]),
+        "enable, then one disable/enable cycle");
+});
 
-    assert.ok(calls.getCurrentCount > 2, "the overlay must retry while nothing is painted");
-    const overlay = calls.themeUpdate[calls.themeUpdate.length - 1];
-    assert.deepStrictEqual(overlay.colors, night.colors,
-        "the overlay must snapshot the newly painted theme, not the previous one");
+test("apply records the enabled theme in the diagnostics events", async () => {
+    const {sandbox, storage} = run();
+    await vm.runInContext("browser.management.setEnabled('my-day@x', true)", sandbox);
+    await vm.runInContext('applyStaticTheme("my-night@x")', sandbox);
+
+    const events = await storage.api.get("autodarkevents");
+    const list = (events["autodarkevents"] || {}).check || [];
+    assert.ok(list.some((entry) => entry.kind === "apply" && String(entry.detail).indexOf("my-night@x") !== -1),
+        "the events must say which theme was really enabled");
+});
+
+test("a stale overlay is not touched when the slot theme is applied", async () => {
+    const stale = {colors: {frame: "#000"}, properties: {color_scheme: "system"}};
+    const {sandbox, calls} = run({themeCurrent: stale});
+    await vm.runInContext("browser.management.setEnabled('my-day@x', true)", sandbox);
+
+    await vm.runInContext('applyStaticTheme("my-night@x")', sandbox);
+
+    assert.strictEqual(calls.themeReset, 0, "the overlay is not dropped with theme.reset()");
+    assert.strictEqual(lastTheme(calls), "my-night@x");
 });
 
 test("no overlay is applied when the theme already follows the OS", async () => {
@@ -1027,41 +963,3 @@ test("the page colour scheme follows the OS by default", async () => {
         "the night slot must leave the page scheme to the OS");
 });
 
-test("a leftover overlay is dropped before the slot theme is shown", async () => {
-    // After the background page restarts, an overlay created by the previous
-    // session is still painted while the module flag says otherwise: the
-    // snapshot then re-applies the old colours and the newly enabled theme is
-    // never seen ("the night theme is configured but never applied").
-    const staleOverlay = {
-        colors: {frame: "#000000", toolbar: "#000000"},
-        properties: {color_scheme: "system"}
-    };
-    const nightTheme = {
-        colors: {frame: "#141b1e", toolbar: "#1c1b22"},
-        properties: {color_scheme: "dark"}
-    };
-    let resetSeen = false;
-    const {sandbox, storage, calls} = run({
-        getCurrent: () => (resetSeen ? nightTheme : staleOverlay)
-    });
-    const noonMs = Date.now() - (Date.now() % 86400000);
-
-    await storage.api.set({
-        "autodarkchangeMode": {mode: "system-theme"},
-        "autodarkdaytimeTheme": {themeId: "my-day@x"},
-        "autodarknighttimeTheme": {themeId: "my-night@x"},
-        "autodarksystemDark": {check: true}
-    });
-
-    vm.runInContext("__fixedNow = " + (noonMs + 12 * 3600000) + "; Date.now = () => __fixedNow;", sandbox);
-    await vm.runInContext("init().then(() => switch_queue)", sandbox);
-
-    assert.ok(calls.themeReset >= 1, "the stale overlay must be reset first");
-    resetSeen = true;
-    vm.runInContext("last_applied = {};", sandbox);
-    await vm.runInContext("queueTick('alarm')", sandbox);
-
-    const overlay = calls.themeUpdate[calls.themeUpdate.length - 1];
-    assert.deepStrictEqual(overlay.colors, nightTheme.colors,
-        "the overlay must be built from the theme that is now painted");
-});
