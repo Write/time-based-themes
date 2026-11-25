@@ -1124,6 +1124,10 @@ const background_scheme_query = window.matchMedia("(prefers-color-scheme: dark)"
 // observations must come from content-script reports only.
 let current_pins_scheme = false;
 
+// The literal scheme the enabled theme declares ("light" or "dark"), or null.
+let current_declared_scheme = null;
+
+
 function refreshCurrentPaint() {
     if (!browser.theme || !browser.theme.getCurrent) {
         return Promise.resolve();
@@ -1131,6 +1135,7 @@ function refreshCurrentPaint() {
     return browser.theme.getCurrent().then((theme) => {
         let scheme = theme && theme.properties ? theme.properties.color_scheme : null;
         current_pins_scheme = scheme === "light" || scheme === "dark";
+        current_declared_scheme = current_pins_scheme ? scheme : null;
         debugLog("paint", "color_scheme=" + JSON.stringify(scheme || null)
             + " pins_os=" + current_pins_scheme);
     }, () => undefined);
@@ -1147,15 +1152,22 @@ function syncSystemDarkFromBackground(mode, reason) {
     // worked when a web page happened to be open and happened to fire its
     // change event (extension event page may be asleep, options page runs no
     // content script, about: pages have none at all).
+    let live = background_scheme_query.matches;
     if (current_pins_scheme) {
-        // Built-in Light/Dark and custom themes that declare color_scheme make
-        // this query echo the theme, not the OS: skip it rather than record a
-        // lie. Content reports still arrive (they follow the OS once
-        // overrideContentColorScheme is "system").
-        debugLog("os-sync", "reason=" + reason + " skipped: enabled theme pins the scheme");
+        // A theme that declares color_scheme light/dark usually makes this query
+        // echo that declaration, so a reading equal to it says nothing.
+        if ((current_declared_scheme === "dark") === live) {
+            debugLog("os-sync", "reason=" + reason + " skipped: enabled theme pins "
+                + current_declared_scheme + ", live=" + live);
+            return;
+        }
+        // The query disagrees with the theme: only the OS can cause that.
+        debugLog("os-sync", "reason=" + reason + " stored=" + system_dark
+            + " live=" + live + " (theme pins " + current_declared_scheme + ": OS wins)");
+        recordSystemDark(live, "background media query (theme pins "
+            + current_declared_scheme + ") on " + reason);
         return;
     }
-    let live = background_scheme_query.matches;
     debugLog("os-sync", "reason=" + reason + " stored=" + system_dark + " live=" + live);
     if (live !== system_dark) {
         recordSystemDark(live, "background media query on " + reason);
@@ -1190,10 +1202,10 @@ function startSchemePoll(mode) {
                 // diagnostics only
             }
         }
-        if (current_pins_scheme) {
+        let live = background_scheme_query.matches;
+        if (current_pins_scheme && (current_declared_scheme === "dark") === live) {
             return;
         }
-        let live = background_scheme_query.matches;
         if (live === system_dark) {
             return;
         }
@@ -1642,7 +1654,8 @@ function setupEventHandlers() {
     // so a change is believed immediately instead of waiting for a page.
     if (typeof background_scheme_query.addEventListener === "function") {
         background_scheme_query.addEventListener("change", () => {
-            if (current_pins_scheme) {
+            if (current_pins_scheme
+                && (current_declared_scheme === "dark") === background_scheme_query.matches) {
                 return;
             }
             getSettings().then((s) => {
