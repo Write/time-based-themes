@@ -69,26 +69,37 @@ function themeDisplayName(theme) {
     return theme.name || theme.id;
 }
 
+// `management.getAll()` only reports the theme that is currently enabled, so a
+// profile with no extra theme installed listed exactly one entry and the
+// dropdowns were unusable. The three built-in themes are part of Firefox
+// itself; catalogue them and merge whatever the API does return.
+const BUILT_IN_THEMES = [
+    {id: "default-theme@mozilla.org", name: "System theme (follows Firefox)"},
+    {id: "firefox-compact-light@mozilla.org", name: "Light"},
+    {id: "firefox-compact-dark@mozilla.org", name: "Dark"}
+];
+
 function loadThemes() {
-    if (!browser.management) {
-        return Promise.resolve([]);
-    }
-    return browser.management.getAll().then((extensions) => {
-        installedThemes = extensions
-            .filter((extension) => extension.type === "theme")
-            .sort((a, b) => {
-                // Built-in themes first, then alphabetical.
-                let aBuiltIn = BUILT_IN_THEME_IDS.indexOf(a.id) !== -1;
-                let bBuiltIn = BUILT_IN_THEME_IDS.indexOf(b.id) !== -1;
-                if (aBuiltIn !== bBuiltIn) {
-                    return aBuiltIn ? -1 : 1;
-                }
-                return themeDisplayName(a).localeCompare(themeDisplayName(b));
-            });
+    let fromApi = browser.management
+        ? browser.management.getAll().then((extensions) => extensions
+            .filter((extension) => extension.type === "theme"), (error) => {
+            onError(error);
+            return [];
+        })
+        : Promise.resolve([]);
+
+    return fromApi.then((extensions) => {
+        let byId = new Map(extensions.map((theme) => [theme.id, theme]));
+        let merged = BUILT_IN_THEMES.map((theme) => {
+            let installed = byId.get(theme.id);
+            byId.delete(theme.id);
+            return {id: theme.id, name: (installed && installed.name) || theme.name};
+        });
+        let others = Array.from(byId.values())
+            .filter((theme) => BUILT_IN_THEME_IDS.indexOf(theme.id) === -1)
+            .sort((a, b) => themeDisplayName(a).localeCompare(themeDisplayName(b)));
+        installedThemes = merged.concat(others);
         return installedThemes;
-    }, (error) => {
-        onError(error);
-        return [];
     });
 }
 
