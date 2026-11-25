@@ -85,6 +85,7 @@ function run(options) {
         actionClicks: [],
         menus: [],
         menuCreated: [],
+        messageListeners: [],
         openOptions: 0
     };
 
@@ -102,10 +103,16 @@ function run(options) {
         },
         management: {
             getAll: () => Promise.resolve([
-                {id: "default-theme@mozilla.org", name: "System theme — auto", type: "theme", enabled: false},
-                {id: "firefox-compact-light@mozilla.org", name: "Light", type: "theme", enabled: false},
-                {id: "my-day@x", name: "Day", type: "theme", enabled: false},
-                {id: "my-night@x", name: "Night", type: "theme", enabled: false},
+                {id: "default-theme@mozilla.org", name: "System theme — auto", type: "theme",
+                    enabled: enabledThemes["default-theme@mozilla.org"] === true},
+                {id: "firefox-compact-light@mozilla.org", name: "Light", type: "theme",
+                    enabled: enabledThemes["firefox-compact-light@mozilla.org"] === true},
+                {id: "firefox-compact-dark@mozilla.org", name: "Dark", type: "theme",
+                    enabled: enabledThemes["firefox-compact-dark@mozilla.org"] === true},
+                {id: "my-day@x", name: "Day", type: "theme",
+                    enabled: enabledThemes["my-day@x"] === true},
+                {id: "my-night@x", name: "Night", type: "theme",
+                    enabled: enabledThemes["my-night@x"] === true},
                 {id: "some-addon@x", name: "Add-on", type: "extension", enabled: true}
             ]),
             get: (id) => Promise.resolve({id: id, enabled: enabledThemes[id] === true}),
@@ -179,7 +186,11 @@ function run(options) {
             onFocusChanged: {addListener() {}}
         },
         runtime: {
-            onMessage: {addListener() {}},
+            onMessage: {
+                addListener(fn) {
+                    calls.messageListeners.push(fn);
+                }
+            },
             onInstalled: {addListener() {}},
             openOptionsPage() {
                 calls.openOptions++;
@@ -466,4 +477,149 @@ test("clicking the manual switch twice goes back to the scheduled theme", async 
     await vm.runInContext("toggleFromToolbar().then(() => switch_queue)", sandbox);
     assert.deepStrictEqual(calls.setEnabled[calls.setEnabled.length - 1], ["my-day@x", true],
         "the second click must go back to the scheduled theme");
+});
+
+// ---------------------------------------------------------------------------
+// system-theme mode: "When my operating system switches between light and dark"
+// ---------------------------------------------------------------------------
+
+function systemSettings(storage, extra) {
+    return storage.api.set(Object.assign({
+        "autodarkchangeMode": {mode: "system-theme"},
+        "autodarkdaytimeTheme": {themeId: "my-day@x"},
+        "autodarknighttimeTheme": {themeId: "my-night@x"},
+        "autodarksunriseTime": {time: "08:00"},
+        "autodarksunsetTime": {time: "20:00"}
+    }, extra || {}));
+}
+
+function lastTheme(calls) {
+    let enabled = calls.setEnabled.filter(([, on]) => on === true);
+    return enabled.length ? enabled[enabled.length - 1][0] : null;
+}
+
+test("system mode applies the daytime theme while the OS is light", async () => {
+    const {sandbox, storage, calls} = run();
+    await systemSettings(storage);
+
+    await vm.runInContext("init().then(() => switch_queue)", sandbox);
+
+    assert.strictEqual(lastTheme(calls), "my-day@x",
+        "a light OS must use the daytime theme, whatever the clock says");
+    assert.deepStrictEqual(calls.overrides.slice(-1), ["system"],
+        "pages must be left on the OS scheme in system mode");
+});
+
+test("a content script report flips the theme without waiting for an alarm", async () => {
+    const {sandbox, storage, calls} = run();
+    await systemSettings(storage);
+
+    await vm.runInContext("init().then(() => switch_queue)", sandbox);
+    assert.strictEqual(lastTheme(calls), "my-day@x");
+
+    // background.js wires the message listener through setupEventHandlers().
+    vm.runInContext("setupEventHandlers()", sandbox);
+
+    // The user switches the OS to dark: every open page reports it.
+    const listener = calls.messageListeners[0];
+    assert.ok(listener, "the background must listen for content script messages");
+    await listener({type: "autodark-scheme", dark: true});
+    // The tick is coalesced behind a short timer.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    assert.strictEqual(lastTheme(calls), "my-night@x",
+        "a dark OS report must switch to the nighttime theme immediately");
+});
+
+test("the OS scheme survives a browser restart", async () => {
+    const {sandbox, storage, calls} = run();
+    await systemSettings(storage, {"autodarksystemDark": {check: true}});
+
+    await vm.runInContext("init().then(() => switch_queue)", sandbox);
+
+    assert.strictEqual(lastTheme(calls), "my-night@x",
+        "a stored dark OS must be honoured on a cold start");
+});
+
+test("system mode keeps pages on the OS scheme even when one is pinned", async () => {
+    const {sandbox, storage, calls} = run();
+    // A pinned day/night scheme used to pin every page too, which stopped the
+    // content scripts from ever reporting an OS change (the "always dark"
+    // report of issue #28).
+    await systemSettings(storage, {
+        "autodarkdayScheme": {value: "dark"},
+        "autodarknightScheme": {value: "dark"}
+    });
+
+    await vm.runInContext("init().then(() => switch_queue)", sandbox);
+
+    assert.deepStrictEqual(calls.overrides.slice(-1), ["system"],
+        "system mode must leave pages on the OS scheme");
+});
+
+test("system mode never paints a built-in light/dark theme", async () => {
+    const {sandbox, storage, calls} = run();
+    await systemSettings(storage, {
+        "autodarkdaytimeTheme": {themeId: "firefox-compact-dark@mozilla.org"},
+        "autodarknighttimeTheme": {themeId: "firefox-compact-dark@mozilla.org"}
+    });
+
+    await vm.runInContext("init().then(() => switch_queue)", sandbox);
+
+    assert.ok(!calls.setEnabled.some(([id, on]) => on === true
+        && (id === "firefox-compact-dark@mozilla.org" || id === "firefox-compact-light@mozilla.org")),
+        "the built-in dark theme pins the OS signal and must not be enabled");
+    assert.ok(!calls.setEnabled.some(([id, on]) => on === true && id === "my-night@x"),
+        "the configured night theme was the built-in one, so nothing else is painted");
+});
+
+test("a fresh install does not default both slots to the dark theme", async () => {
+    const {sandbox, enabledThemes} = run();
+    enabledThemes["firefox-compact-dark@mozilla.org"] = true;
+
+    await vm.runInContext("setDefaultThemes().then(() => switch_queue)", sandbox);
+
+    assert.strictEqual(vm.runInContext("DEFAULT_DAYTIME_THEME", sandbox),
+        "firefox-compact-light@mozilla.org",
+        "the daytime default must be the light theme, not the dark one");
+    assert.strictEqual(vm.runInContext("DEFAULT_NIGHTTIME_THEME", sandbox),
+        "firefox-compact-dark@mozilla.org");
+});
+
+test("setStorage leaves an existing value alone unless overrideDefault is set", async () => {
+    const {sandbox, storage} = run();
+
+    await storage.api.set({"autodarkchangeMode": {mode: "manual-suntimes"}});
+
+    await vm.runInContext(
+        'setStorage({"autodarkchangeMode": {mode: "location-suntimes"}})', sandbox);
+    assert.strictEqual(storage.data["autodarkchangeMode"].mode, "manual-suntimes",
+        "the start-up defaults must not overwrite a stored value");
+
+    await vm.runInContext(
+        'setStorage({"autodarkchangeMode": {mode: "location-suntimes"}}, true)', sandbox);
+    assert.strictEqual(storage.data["autodarkchangeMode"].mode, "location-suntimes",
+        "an explicit override must replace the stored value");
+});
+
+test("the options page writes its settings with overrideDefault", () => {
+    // Regression: persist() used to call setStorage(values) without the
+    // override flag, so every edit was silently dropped as soon as init() had
+    // created the key — the page looked like it saved and changed nothing.
+    const source = fs.readFileSync(path.join(ROOT, "js/options.js"), "utf8");
+    const start = source.indexOf("function persist(");
+    assert.notStrictEqual(start, -1, "js/options.js must still define persist()");
+    const body = source.slice(start, source.indexOf("function saveRandomPool("));
+
+    assert.match(body, /setStorage\(values, true\)/,
+        "persist() must pass overrideDefault, otherwise every edit is dropped");
+});
+
+test("geolocation updates both stored coordinates", () => {
+    const source = fs.readFileSync(path.join(ROOT, "js/common.js"), "utf8");
+    const start = source.indexOf("function setGeolocation(");
+    const body = source.slice(start, source.indexOf("function ", start + 10));
+
+    assert.match(body, /\}, true\)\.then\(\(\) => resolve\(position\.coords\)/,
+        "a second location lookup must overwrite the first one");
 });

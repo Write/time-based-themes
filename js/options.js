@@ -333,7 +333,10 @@ function flashSaved() {
 
 function persist(values) {
     saving = true;
-    return setStorage(values)
+    // overrideDefault is mandatory here: setStorage() only fills *missing* keys,
+    // which is right for the start-up defaults but meant every edit made in this
+    // page was silently dropped once init() had created the key.
+    return setStorage(values, true)
         .then(() => getSettings())
         .then((s) => {
             currentSettings = s;

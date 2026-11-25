@@ -435,19 +435,20 @@ function sanitizeTheme(theme) {
 // Re-apply the built-in Light/Dark substitution: those themes pin the OS
 // light/dark signal, which stops detection entirely.
 function substituteBuiltInTheme(themeId, themeKey, s) {
-    let aligned =
-        (themeKey === DAYTIME_THEME_KEY && themeId === "firefox-compact-light@mozilla.org")
-        || (themeKey === NIGHTTIME_THEME_KEY && themeId === "firefox-compact-dark@mozilla.org");
-    if (!aligned) {
+    if (s.changeMode !== "system-theme") {
         return themeId;
     }
-    if (s.changeMode === "system-theme"
-        && s.dayThemeId && s.nightThemeId
-        && s.dayThemeId !== s.nightThemeId) {
-        logDebug("substituteBuiltInTheme - " + themeId + " pins the OS scheme; using System theme (auto).");
-        return "default-theme@mozilla.org";
+    // The built-in Light and Dark themes pin the OS light/dark signal: a page
+    // (and the background query) then reports that pinned value forever, which
+    // is how a light OS ended up painted dark. Neither belongs in system-theme
+    // mode, whichever slot asks for it — the System theme follows the OS by
+    // itself.
+    if (themeId !== "firefox-compact-light@mozilla.org"
+        && themeId !== "firefox-compact-dark@mozilla.org") {
+        return themeId;
     }
-    return themeId;
+    logDebug("substituteBuiltInTheme - " + themeId + " pins the OS scheme; using System theme (auto).");
+    return "default-theme@mozilla.org";
 }
 
 // ---------------------------------------------------------------------------
@@ -460,14 +461,18 @@ function resolveContentScheme(scheme, slot, mode) {
     if (scheme === "off") {
         return null;
     }
+    // In system-theme mode the OS drives everything, so the page scheme stays
+    // "system" even if the day/night slot carries a pinned value: pinning it
+    // is what starved OS detection (every page then reported the pinned value,
+    // and the theme froze on whatever the last slot happened to be).
+    if (mode === "system-theme") {
+        return "system";
+    }
     if (scheme === "system") {
         return "system";
     }
     if (scheme === "light" || scheme === "dark") {
         return scheme;
-    }
-    if (mode === "system-theme") {
-        return "system";
     }
     return slot === SLOT_DAY ? "light" : "dark";
 }
@@ -728,6 +733,11 @@ function syncSystemDarkFromBackground(mode) {
     if (mode !== "system-theme" || last_content_scheme === "system") {
         return;
     }
+    // Only seed an unknown value: overwriting a stored one would let the
+    // browser-theme-following query undo a real OS report on every startup.
+    if (system_dark !== null) {
+        return;
+    }
     if (background_scheme_query.matches !== system_dark) {
         recordSystemDark(background_scheme_query.matches, "background media query");
     }
@@ -738,6 +748,10 @@ function tick(reason) {
 
     return getSettings().then((s) => {
         DEBUG_MODE = s.debugMode;
+
+        // Seed the OS scheme when no page has reported one yet (fresh install,
+        // a browser restarted while no content script was running).
+        syncSystemDarkFromBackground(s.changeMode);
 
         if (s.startupOnly && FORCED_REASONS.indexOf(reason) === -1) {
             logDebug("tick ignored: change-on-startup-only is enabled.");
@@ -992,16 +1006,26 @@ function setDefaultThemes() {
 
     return browser.management.getAll()
         .then((extensions) => {
+            const LIGHT = "firefox-compact-light@mozilla.org";
+            const DARK = "firefox-compact-dark@mozilla.org";
+            let enabledTheme = "";
             for (let extension of extensions) {
-                if (extension.type === "theme") {
-                    if (extension.enabled) {
-                        DEFAULT_DAYTIME_THEME = extension.id;
-                        DEFAULT_NIGHTTIME_THEME = extension.id;
-                    }
-                    if (extension.id === "firefox-compact-dark@mozilla.org") {
-                        DEFAULT_NIGHTTIME_THEME = extension.id;
-                    }
+                if (extension.type === "theme" && extension.enabled) {
+                    enabledTheme = extension.id;
                 }
+            }
+
+            if (enabledTheme === DARK) {
+                // Defaulting both slots to the dark theme made a fresh install
+                // look permanently dark; pair it with the light one instead.
+                DEFAULT_DAYTIME_THEME = LIGHT;
+                DEFAULT_NIGHTTIME_THEME = DARK;
+            } else if (enabledTheme === LIGHT) {
+                DEFAULT_DAYTIME_THEME = LIGHT;
+                DEFAULT_NIGHTTIME_THEME = DARK;
+            } else {
+                DEFAULT_DAYTIME_THEME = enabledTheme;
+                DEFAULT_NIGHTTIME_THEME = enabledTheme;
             }
         }, onError);
 }
@@ -1022,7 +1046,7 @@ function setGeolocation() {
             setStorage({
                 [GEOLOCATION_LATITUDE_KEY]: { latitude: position.coords.latitude },
                 [GEOLOCATION_LONGITUDE_KEY]: { longitude: position.coords.longitude }
-            }).then(() => resolve(position.coords), reject);
+            }, true).then(() => resolve(position.coords), reject);
         }, (error) => {
             reject(error && error.message ? error.message : "Unable to fetch current location.");
         }, { timeout: 30000, maximumAge: 3600000 });
@@ -1093,6 +1117,27 @@ function setupEventHandlers() {
         .then((obj) => {
             DEBUG_MODE = boolSetting(obj, DEBUG_MODE_KEY, DEFAULT_DEBUG_MODE);
         }, onError);
+
+    // Firefox does not always deliver the change event for this query, but when
+    // it does it is the cheapest OS switch signal there is.
+    if (typeof background_scheme_query.addEventListener === "function") {
+        background_scheme_query.addEventListener("change", () => {
+            getSettings().then((s) => {
+                if (s.changeMode !== "system-theme") {
+                    return;
+                }
+                if (last_content_scheme === "system") {
+                    // Pages report the OS directly; they win over the browser
+                    // theme this query follows.
+                    return;
+                }
+                logDebug("Background media query changed to "
+                    + (background_scheme_query.matches ? "dark" : "light"));
+                recordSystemDark(background_scheme_query.matches, "media query")
+                    .then(() => queueTick("scheme"));
+            }, onError);
+        });
+    }
 
 if (browser.storage.onChanged) {
     let pending = null;
