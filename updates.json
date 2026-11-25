@@ -3,9 +3,9 @@
     "{eae8508f-68a5-4a0b-80fb-35c1675184dc}": {
       "updates": [
         {
-          "version": "2.0.0",
-          "update_link": "https://git.drop.tf/Gliglue/time-based-themes/releases/download/v2.0.0/automaticdark-2.0.0.xpi",
-          "update_hash": "sha256:929503f823bd7761b9464ddcb9e4598658daeb82cebe9b5c2d9a820efba5504a",
+          "version": "2.0.1",
+          "update_link": "https://git.drop.tf/Gliglue/time-based-themes/releases/download/v2.0.1/automaticdark-2.0.1.xpi",
+          "update_hash": "sha256:f08696e4651277b70b7ff5cf888a43e766a2de0ce814ddab61e9b9970abc4809",
           "applications": {
             "gecko": {
               "strict_min_version": "140.0"
