@@ -841,3 +841,42 @@ test("the page colour scheme follows the OS by default", async () => {
     assert.deepStrictEqual(calls.overrides.slice(-1), ["system"],
         "the night slot must leave the page scheme to the OS");
 });
+
+test("a leftover overlay is dropped before the slot theme is shown", async () => {
+    // After the background page restarts, an overlay created by the previous
+    // session is still painted while the module flag says otherwise: the
+    // snapshot then re-applies the old colours and the newly enabled theme is
+    // never seen ("the night theme is configured but never applied").
+    const staleOverlay = {
+        colors: {frame: "#000000", toolbar: "#000000"},
+        properties: {color_scheme: "system"}
+    };
+    const nightTheme = {
+        colors: {frame: "#141b1e", toolbar: "#1c1b22"},
+        properties: {color_scheme: "dark"}
+    };
+    let resetSeen = false;
+    const {sandbox, storage, calls} = run({
+        getCurrent: () => (resetSeen ? nightTheme : staleOverlay)
+    });
+    const noonMs = Date.now() - (Date.now() % 86400000);
+
+    await storage.api.set({
+        "autodarkchangeMode": {mode: "system-theme"},
+        "autodarkdaytimeTheme": {themeId: "my-day@x"},
+        "autodarknighttimeTheme": {themeId: "my-night@x"},
+        "autodarksystemDark": {check: true}
+    });
+
+    vm.runInContext("__fixedNow = " + (noonMs + 12 * 3600000) + "; Date.now = () => __fixedNow;", sandbox);
+    await vm.runInContext("init().then(() => switch_queue)", sandbox);
+
+    assert.ok(calls.themeReset >= 1, "the stale overlay must be reset first");
+    resetSeen = true;
+    vm.runInContext("last_applied = {};", sandbox);
+    await vm.runInContext("queueTick('alarm')", sandbox);
+
+    const overlay = calls.themeUpdate[calls.themeUpdate.length - 1];
+    assert.deepStrictEqual(overlay.colors, nightTheme.colors,
+        "the overlay must be built from the theme that is now painted");
+});

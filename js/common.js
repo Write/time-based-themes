@@ -544,12 +544,34 @@ function applyContentScheme(value) {
 // Applying a theme
 // ---------------------------------------------------------------------------
 
-function resetOverlay() {
-    if (!caps.theme || !overlay_applied) {
+// `overlay_applied` only knows about overlays *this* session created: after
+// the background page restarts, an overlay from the previous session is still
+// painted while the flag says otherwise. Snapshotting then re-applies the old
+// overlay's colours, so the newly enabled theme never shows up. Callers that
+// are about to enable a static theme therefore force the reset.
+function resetOverlay(force) {
+    if (!caps.theme) {
+        return Promise.resolve();
+    }
+    if (!overlay_applied && !force) {
         return Promise.resolve();
     }
     overlay_applied = false;
     return browser.theme.reset().catch(onError);
+}
+
+// A theme.update() overlay always declares its own color_scheme, and a static
+// theme only does when it follows the OS. Anything painted with an explicit
+// scheme therefore means an overlay is on top and has to be dropped before a
+// static theme can be shown.
+function overlayLooksActive() {
+    if (!caps.theme) {
+        return Promise.resolve(false);
+    }
+    return browser.theme.getCurrent()
+        .then((current) => !!(current && current.properties
+            && typeof current.properties.color_scheme === "string"))
+        .catch(() => false);
 }
 
 // The overlay is a snapshot of whatever theme.getCurrent() reports, so it has
@@ -748,10 +770,15 @@ function applyThemeId(themeId, mode, themeKey, s) {
         return applyCustomTheme(spec, mode);
     }
 
-    let hadOverlay = overlay_applied;
-    return resetOverlay()
+    // Drop any overlay before enabling the static theme: a leftover one — from
+    // this session or from before the background page restarted — hides the
+    // theme we are about to enable, and the color_scheme snapshot would then be
+    // taken from that stale overlay. `overlay_applied` cannot be trusted for
+    // this, so ask the browser what is painted.
+    return overlayLooksActive()
+        .then((overlay) => resetOverlay(mode === "system-theme" && overlay))
         .then(() => enableInstalledTheme(spec.id, mode))
-        .then(() => (hadOverlay ? ensurePainted(spec.id) : undefined));
+        .then(() => (mode === "system-theme" ? ensurePainted(spec.id) : undefined));
 }
 
 // Exposed for the options page preview button (issue #61): the candidate theme
