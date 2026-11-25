@@ -74,6 +74,7 @@ function makeStorage() {
 function run(options) {
     options = options || {};
     let storage = makeStorage();
+    let overlay = null; // what theme.update() painted, if anything
     let calls = {
         setEnabled: [],
         themeUpdate: [],
@@ -150,6 +151,12 @@ function run(options) {
         theme: {
             getCurrent() {
                 calls.getCurrentCount++;
+                // theme.update() REPLACES the painted theme: getCurrent() then
+                // reports the overlay, which is why the extension can check the
+                // result instead of assuming it.
+                if (overlay) {
+                    return Promise.resolve(overlay);
+                }
                 if (typeof options.getCurrent === "function") {
                     return Promise.resolve(options.getCurrent(calls.getCurrentCount));
                 }
@@ -161,6 +168,7 @@ function run(options) {
             },
             update(theme) {
                 calls.themeUpdate.push(theme);
+                overlay = theme;
                 return Promise.resolve();
             },
             reset() {
@@ -839,11 +847,11 @@ test("system-theme mode never keeps a literal-scheme built-in theme active", asy
 
 
 
-// Applying a static theme is one decision: exactly one theme enabled, verified.
-// No overlay, no theme.reset(): theme.update() replaces the enabled theme and
-// theme.reset() repaints the default one, and both made a working switch paint
-// something else than the theme the user picked.
-test("applying a static theme never paints an overlay", async () => {
+// In system-theme mode the theme that stays painted MUST follow the OS: while
+// it declares color_scheme "light"/"dark", every media query echoes the theme
+// instead of the OS, so the mode can never detect a switch. The overlay is the
+// only way to keep the user's colours while making the declaration honest.
+test("system-theme mode paints the theme with a system colour scheme", async () => {
     const {sandbox, storage, calls} = run({mediaDark: true});
     const noonMs = Date.now() - (Date.now() % 86400000);
 
@@ -857,11 +865,39 @@ test("applying a static theme never paints an overlay", async () => {
     vm.runInContext("__fixedNow = " + (noonMs + 12 * 3600000) + "; Date.now = () => __fixedNow;", sandbox);
     await vm.runInContext("init().then(() => switch_queue)", sandbox);
 
-    assert.strictEqual(calls.themeUpdate.length, 0,
-        "no theme.update() overlay: it replaces the enabled theme");
     assert.strictEqual(calls.themeReset, 0,
         "no theme.reset(): it repaints the default theme");
     assert.strictEqual(lastTheme(calls), "my-night@x", "the night theme is the enabled one");
+    assert.strictEqual(calls.themeUpdate.length, 1,
+        "exactly one overlay, and it is verified rather than repeated");
+    const overlay = calls.themeUpdate[0];
+    assert.strictEqual(overlay.properties.color_scheme, "system",
+        "the painted theme must follow the OS, or detection is blind");
+    assert.strictEqual(overlay.colors.frame, "#1c1b22",
+        "the overlay keeps the theme's own colours");
+});
+
+// The same apply outside system-theme mode: the overlay exists for OS
+// detection only, and must never repaint a scheduled slot (the fallback that
+// painted the wrong theme and made a working switch look broken).
+test("time-based modes never paint an overlay", async () => {
+    const {sandbox, storage, calls} = run({mediaDark: true});
+    const noonMs = Date.now() - (Date.now() % 86400000);
+
+    await storage.api.set({
+        "autodarkchangeMode": {mode: "manual-suntimes"},
+        "autodarkdaytimeTheme": {themeId: "my-day@x"},
+        "autodarknighttimeTheme": {themeId: "my-night@x"},
+        "autodarksunriseTime": {value: "08:00"},
+        "autodarksunsetTime": {value: "20:00"}
+    });
+
+    vm.runInContext("__fixedNow = " + (noonMs + 12 * 3600000) + "; Date.now = () => __fixedNow;", sandbox);
+    await vm.runInContext("init().then(() => switch_queue)", sandbox);
+
+    assert.strictEqual(calls.themeUpdate.length, 0,
+        "no overlay outside system-theme mode");
+    assert.strictEqual(lastTheme(calls), "my-day@x", "noon is the day slot");
 });
 
 test("a theme that is already the enabled one is left alone", async () => {

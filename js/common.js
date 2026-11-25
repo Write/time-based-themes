@@ -964,11 +964,54 @@ function applyThemeId(themeId, mode, themeKey, s) {
     // mis-report: theme.reset() repaints the default theme (Firefox bug
     // 1415267) and the default theme has colours, so "a theme with colours is
     // on screen" was true while the user's theme was not on screen at all.
-    return applyStaticTheme(spec.id);
+    return applyStaticTheme(spec.id, mode);
+}
+
+// In system-theme mode the OS signal is only observable while the *painted*
+// theme declares color_scheme "system". A static theme that declares
+// "light"/"dark" makes every media query - pages, settings page, background -
+// echo that value, so the extension would never see the OS change. Check the
+// result instead of assuming it: the overlay call is easy to lose in a
+// refactor (`enableInstalledTheme`, which owned it, was dead code while the
+// report said the mode "never switches").
+function verifySystemFollowing(themeId) {
+    if (!caps.theme || !browser.theme.getCurrent) {
+        return Promise.resolve(false);
+    }
+    return browser.theme.getCurrent().then((current) => {
+        let scheme = current && current.properties ? current.properties.color_scheme : null;
+        current_pins_scheme = scheme === "light" || scheme === "dark";
+        current_declared_scheme = current_pins_scheme ? scheme : null;
+        if (scheme === "system") {
+            debugLog("overlay", "verified: " + themeId + " follows the OS");
+            return true;
+        }
+        debugLog("overlay", "NOT following the OS (color_scheme="
+            + JSON.stringify(scheme || null) + ", theme " + themeId
+            + "): OS detection is blind until a web page reports");
+        return false;
+    }, () => false);
 }
 
 // Make `themeId` the one enabled theme, and check it rather than assume it.
-function applyStaticTheme(themeId) {
+function applyStaticTheme(themeId, mode) {
+    let applied = applyStaticThemeOnly(themeId);
+    if (mode !== "system-theme") {
+        return applied;
+    }
+    return applied.then((ok) => {
+        let once = () => ensureColorSchemeSystem(themeId)
+            .then(() => verifySystemFollowing(themeId));
+        // A theme is only painted a moment after setEnabled() resolves, and the
+        // overlay has nothing to snapshot before that: one retry, then report.
+        return once()
+            .then((following) => (following ? true : once()))
+            .then(() => undefined, () => undefined)
+            .then(() => ok);
+    });
+}
+
+function applyStaticThemeOnly(themeId) {
     return enabledThemeId().then((actual) => {
         if (actual === themeId) {
             pushEvent("apply", "already enabled " + themeId);
