@@ -553,7 +553,20 @@ function ensureColorSchemeSystem() {
 // theme that is already enabled — the disable/enable churn is what used to
 // flip Firefox's DRM checkbox on Linux (issue #26).
 function enableInstalledTheme(themeId, mode) {
-    return browser.management.get(themeId)
+    // management.get() can refuse the built-in themes ("System", "Light",
+    // "Dark") on some builds even though setEnabled() works. Falling back keeps
+    // system-theme mode from silently staying on the previous theme.
+    let info = browser.management.get(themeId)
+        .catch((error) => {
+            if (BUILT_IN_THEME_IDS.indexOf(themeId) === -1) {
+                throw error;
+            }
+            logDebug("management.get refused " + themeId + " (" + error
+                + "), enabling it anyway.");
+            return { enabled: false };
+        });
+
+    return info
         .then((info) => {
             if (!info.enabled) {
                 logDebug("Enabling theme " + themeId);
