@@ -847,6 +847,70 @@ function systemFollowingThemeId(themeId, mode) {
     return themeId;
 }
 
+// What Firefox says is enabled right now, versus what we asked for.
+//
+// `management.setEnabled()` can resolve while the default theme stays on
+// screen (theme.reset() repaints it — Firefox bug 1415267), and every log line
+// we had reported the *intention*, never the result. The report « preview does
+// not even work » is that gap: apply is journalised, nothing is painted.
+function enabledThemeId() {
+    if (!browser.management || !browser.management.getAll) {
+        return Promise.resolve(null);
+    }
+    return browser.management.getAll().then((list) => {
+        let enabled = (list || []).filter((entry) => entry.type === "theme" && entry.enabled);
+        return enabled.length ? enabled[0].id : null;
+    }, () => null);
+}
+
+// Make sure the theme we chose is the one the browser holds. Toggling only when
+// it is not: a disable/enable cycle is what forces a real repaint (issue #26 is
+// the reason we never toggle a theme that is already in place).
+function describeTheme(themeId) {
+    if (!browser.management || !browser.management.get) {
+        return Promise.resolve("management unavailable");
+    }
+    return browser.management.get(themeId).then((info) => {
+        if (!info) {
+            return "not installed";
+        }
+        return "enabled=" + info.enabled + " type=" + info.type + " version=" + info.version
+            + " mayDisable=" + info.mayDisable + " name=" + JSON.stringify(info.name);
+    }, (error) => "management.get refused: " + (error && error.message));
+}
+
+function verifyEnabled(themeId, label) {
+    return enabledThemeId().then((actual) => {
+        pushEvent("verify", label + " expected=" + themeId + " enabled=" + actual);
+        if (actual !== themeId) {
+            // Which theme refused, and what Firefox thinks of it: a theme that
+            // Firefox itself marks as broken cannot be fixed from here.
+            describeTheme(themeId).then((description) => {
+                pushEvent("verify", label + " wanted: " + description);
+            }, () => {});
+        }
+        if (actual === themeId || BUILT_IN_THEME_IDS.indexOf(themeId) !== -1) {
+            return actual === themeId;
+        }
+        if (!browser.management || !browser.management.setEnabled) {
+            return false;
+        }
+        logDebug("verifyEnabled: " + themeId + " is not the enabled theme (" + actual
+            + " is), toggling it back on.");
+        return withTimeout(browser.management.setEnabled(themeId, false), "management.setEnabled")
+            .then(() => withTimeout(browser.management.setEnabled(themeId, true),
+                "management.setEnabled"))
+            .then(() => enabledThemeId())
+            .then((again) => {
+                pushEvent("verify", label + " after toggle enabled=" + again);
+                return again === themeId;
+            }, (error) => {
+                pushEvent("verify", label + " toggle failed: " + (error && error.message));
+                return false;
+            });
+    });
+}
+
 function applyThemeId(themeId, mode, themeKey, s) {
     if (!caps.theme || !caps.management) {
         logDebug("applyThemeId: no theme API available (Thunderbird?), skipping.");
@@ -909,7 +973,8 @@ function applyThemeId(themeId, mode, themeKey, s) {
                     .then(() => (mode === "system-theme"
                         ? guard(ensureColorSchemeSystem(spec.id), "theme.update (overlay)")
                         : undefined));
-            });
+            })
+            .then(() => verifyEnabled(spec.id, "apply"));
     });
 }
 
