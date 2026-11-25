@@ -108,7 +108,11 @@ function run(options) {
                 calls.alarms.created = name;
             },
             clear: () => Promise.resolve(true),
-            onAlarm: {addListener() {}}
+            onAlarm: {
+                addListener(fn) {
+                    calls.alarmListeners = (calls.alarmListeners || []).concat(fn);
+                }
+            }
         },
         management: {
             getAll: () => Promise.resolve([
@@ -566,6 +570,33 @@ function lastTheme(calls) {
     let enabled = calls.setEnabled.filter(([, on]) => on === true);
     return enabled.length ? enabled[enabled.length - 1][0] : null;
 }
+
+// "There is 0 log written": the trace has to exist in storage after a tick and
+// be served to the settings page, otherwise the diagnostic channel is theatre.
+test("the debug trace exists after a tick and is served to the page", async () => {
+    const {sandbox, storage, calls} = run();
+    await systemSettings(storage);
+    await vm.runInContext("init().then(() => switch_queue)", sandbox);
+    vm.runInContext("setupEventHandlers()", sandbox);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    let stored = storage.data["autodarkdebug"];
+    assert.ok(stored && Array.isArray(stored.check) && stored.check.length > 0,
+        "a tick must leave a trace in storage");
+
+    assert.ok(calls.messageListeners.length > 0,
+        "a message listener must be registered (got " + calls.messageListeners.length + ")");
+    let listener = calls.messageListeners[0];
+    let text = await listener({type: "autodark-debug"});
+    assert.ok(typeof text === "string" && text.length > 0, "the page must receive the trace");
+    assert.match(text, /tick|os-sync|apply/, "the trace has to name what it did");
+});
+
+test("the alarm listener is registered while the background script is evaluated", () => {
+    const {calls} = run();
+    assert.strictEqual((calls.alarmListeners || []).length, 1,
+        "an alarm listener added after init() resolves is never called by Firefox");
+});
 
 test("system mode applies the daytime theme while the OS is light", async () => {
     const {sandbox, storage, calls} = run();

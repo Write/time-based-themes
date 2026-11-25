@@ -7,7 +7,7 @@
 // applies the right theme. setupEventHandlers() then wires the storage,
 // message and toolbar listeners.
 
-init();
+ensureInitialised();
 setupEventHandlers();
 
 browser.runtime.onInstalled.addListener((details) => {

@@ -840,6 +840,13 @@ function start() {
     wireCustomThemes();
     showVersion();
     renderDiagnostics();
+    on($("reset-diagnostics"), "click", () => {
+        browser.runtime.sendMessage({type: "autodark-debug-clear"})
+            .then(() => setTimeout(renderDiagnostics, 300))
+            .then(() => showMessage("force-message", "Diagnostics cleared."))
+            .catch(onError);
+    });
+
     on($("copy-diagnostics"), "click", () => {
         let text = ($("diagnostics") || {}).textContent || "";
         let done = navigator.clipboard && navigator.clipboard.writeText

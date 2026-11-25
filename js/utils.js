@@ -68,8 +68,10 @@ function debugLoad() {
     }
     return browser.storage.local.get(DEBUG_LOG_KEY).then((obj) => {
         let stored = obj && obj[DEBUG_LOG_KEY] && obj[DEBUG_LOG_KEY].check;
-        if (Array.isArray(stored) && debug_trace === null) {
-            debug_trace = stored;
+        if (Array.isArray(stored) && stored.length) {
+            // Prepend: init() logs before this resolves, and an event page that
+            // wakes up must not look like a brand new install.
+            debug_trace = stored.concat(debug_trace || []).slice(-DEBUG_LOG_MAX);
         }
     }, () => {});
 }

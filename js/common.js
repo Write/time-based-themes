@@ -1334,8 +1334,30 @@ function ensureTickAlarm(s) {
 
 function alarmListener(alarmInfo) {
     if (alarmInfo && alarmInfo.name === TICK_ALARM_NAME) {
+        // The alarm is the only thing that wakes this page up, so it cannot
+        // assume init() already ran: do it here when needed.
+        ensureInitialised();
         queueTick("alarm");
     }
+}
+
+// Firefox only honours an event listener that was registered *synchronously*
+// while the background script is being evaluated. The alarm listener used to be
+// added inside init(), after its first `await`, which is silently accepted and
+// then never called — the minutely tick never fired, so an OS appearance change
+// was only noticed when something else asked for a recheck by hand.
+if (browser.alarms && browser.alarms.onAlarm) {
+    browser.alarms.onAlarm.addListener(alarmListener);
+}
+
+// Resolves once init() has finished, so a waking alarm can wait on it.
+let init_promise = null;
+
+function ensureInitialised() {
+    if (!init_promise) {
+        init_promise = Promise.resolve(init()).catch(onError);
+    }
+    return init_promise;
 }
 
 // ---------------------------------------------------------------------------
@@ -1427,7 +1449,6 @@ function init() {
         }, onError)
         .then(() => getSettings())
         .then((s) => {
-            browser.alarms.onAlarm.addListener(alarmListener);
             return ensureTickAlarm(s).then(() => s);
         })
         .then((s) => {
@@ -1566,8 +1587,16 @@ if (browser.runtime && browser.runtime.onMessage) {
         }
 
         // The trace lives here: this page is the only one that sees a tick.
+        // Answer from storage: an event page that has just woken up has an
+        // empty in-memory buffer and would report "no log at all".
         if (message.type === "autodark-debug") {
-            return Promise.resolve(debugText());
+            return debugLoad()
+                .then(() => browser.storage.local.get(DEBUG_LOG_KEY))
+                .then((obj) => {
+                    let stored = obj && obj[DEBUG_LOG_KEY] && obj[DEBUG_LOG_KEY].check;
+                    let lines = Array.isArray(stored) ? stored : debugSnapshot();
+                    return lines.length ? lines.join("\n") : debugText();
+                });
         }
         if (message.type === "autodark-debug-clear") {
             return debugClear().then(() => true);
