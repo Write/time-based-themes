@@ -862,3 +862,32 @@ window.addEventListener("pagehide", () => {
 });
 
 start();
+
+// Report OS scheme changes from the settings page too.
+//
+// No content script runs on our own pages, so a switch made while the settings
+// page is the only thing open used to be detected by nobody. This page follows
+// the browser theme rather than the OS (Firefox bug 1741009), but the theme we
+// keep active declares color_scheme "system", so the query does follow the OS
+// here — and it is the only witness available in that situation.
+const optionsSchemeQuery = window.matchMedia("(prefers-color-scheme: dark)");
+
+function reportOptionsScheme() {
+    try {
+        let done = browser.runtime.sendMessage({
+            type: "autodark-scheme",
+            dark: optionsSchemeQuery.matches
+        });
+        if (done && typeof done.catch === "function") {
+            done.catch(() => {});
+        }
+    } catch (error) {
+        // Background restarting; the next report finds it awake.
+    }
+}
+
+if (typeof optionsSchemeQuery.addEventListener === "function") {
+    optionsSchemeQuery.addEventListener("change", reportOptionsScheme);
+} else if (typeof optionsSchemeQuery.addListener === "function") {
+    optionsSchemeQuery.addListener(reportOptionsScheme);
+}

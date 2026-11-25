@@ -979,15 +979,81 @@ function recordSystemDark(dark, reason) {
         .then(() => true, () => true);
 }
 
+// How long an ambiguous report must hold before it is believed.
+//
+// Waiting for a second page to confirm meant "nothing happens" whenever the
+// user had one tab open. Re-reading the report a moment later distinguishes a
+// stable OS value from a transient echo of the theme we just painted.
+const CONFIRM_MS = 600;
+let confirm_timer = null;
+
 // Two sightings of the same value are required before the stored scheme moves.
+//
+// Only used for reports that may be our own theme talking back (see
+// handleSchemeReport): a genuine OS change is accepted on the first sighting,
+// and an ambiguous one is settled by CONFIRM_MS, not by waiting for a second
+// page that may never exist.
 function considerSystemDark(dark, reason) {
     if (pending_os_dark && pending_os_dark.dark === dark) {
         return recordSystemDark(dark, reason + ", confirmed");
     }
     pending_os_dark = {dark: dark, ms: Date.now()};
     logDebug("OS report (" + reason + "): " + (dark ? "dark" : "light")
-        + " seen once, waiting for confirmation.");
+        + " seen once, re-checking in " + CONFIRM_MS + "ms.");
+    if (confirm_timer === null && typeof setTimeout === "function") {
+        confirm_timer = setTimeout(() => {
+            confirm_timer = null;
+            let pending = pending_os_dark;
+            if (!pending) {
+                return;
+            }
+            recordSystemDark(pending.dark, "held for " + CONFIRM_MS + "ms").then((moved) => {
+                if (!moved) {
+                    return;
+                }
+                getSettings().then((s) => {
+                    if (s.changeMode === "system-theme") {
+                        queueTick("os-change");
+                    }
+                }, onError);
+            });
+        }, CONFIRM_MS);
+    }
     return Promise.resolve(false);
+}
+
+// The light/dark scheme our own theme declares, when it is knowable.
+//
+// A theme carries `properties.color_scheme`, and Firefox mirrors that value onto
+// pages' prefers-color-scheme. A report equal to this is therefore ambiguous:
+// it may be the OS, or it may be our theme echoing back. A report that
+// contradicts it can only come from the OS.
+function paintedEchoDark() {
+    let id = last_applied.themeId;
+    if (id === "firefox-compact-light@mozilla.org") {
+        return false;
+    }
+    if (id === "firefox-compact-dark@mozilla.org") {
+        return true;
+    }
+    return null;
+}
+
+// Decide what to do with one scheme report.
+//
+// The 2.0.12 fix required two sightings of *every* report. A real OS switch
+// delivers a single report per open page — with one tab open the theme then
+// never moved at all ("it does not toggle any more on a system-wide colour
+// scheme change"). Voting is only needed for the ambiguous case: a value that
+// matches the scheme our own theme declares.
+function handleSchemeReport(dark, reason) {
+    let echo = paintedEchoDark();
+    if (echo !== null && echo === !!dark) {
+        logDebug("OS report (" + reason + ") matches our own theme's declared scheme, "
+            + "asking for a confirmation.");
+        return considerSystemDark(!!dark, reason);
+    }
+    return recordSystemDark(!!dark, reason);
 }
 
 // In system-theme mode the content-script reports are the reliable source for
@@ -1410,10 +1476,9 @@ function setupEventHandlers() {
                     return;
                 }
                 // The query follows the browser theme, so it reports whatever
-                // our own theme declares. Only tick when the two-sighting vote
-                // actually moved the value; ticking on every observation made
-                // it loop forever.
-                considerSystemDark(background_scheme_query.matches, "media query")
+                // our own theme declares; handleSchemeReport only asks for a
+                // confirmation when the value is ambiguous.
+                handleSchemeReport(background_scheme_query.matches, "media query")
                     .then((moved) => {
                         if (moved) {
                             queueTick("os-change");
@@ -1482,7 +1547,7 @@ if (browser.runtime && browser.runtime.onMessage) {
                 logDebug("content script OS report ignored: pages are pinned to " + last_content_scheme);
                 return Promise.resolve(true);
             }
-            return recordSystemDark(!!message.dark, "content script").then(() => {
+            return handleSchemeReport(message.dark, "content script").then(() => {
                 getSettings().then((s) => {
                     if (s.changeMode === "system-theme") {
                         queueTick("os-change");
