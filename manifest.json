@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "automaticDark - Time-Based Theme Changer",
-  "version": "2.0.1",
+  "version": "2.0.2",
   "description": "Automatically switch Firefox's theme at sunrise and sunset, at times you choose, or with your operating system's light/dark mode.",
   "homepage_url": "https://github.com/skhzhang/time-based-themes/",
   "browser_specific_settings": {

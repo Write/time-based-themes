@@ -873,29 +873,40 @@ function openSettings() {
 }
 
 // Right-click on the toolbar button: switch day/night without opening a page.
+//
+// Everything here is best-effort: browsers disagree on the context name
+// (“action” is the Chrome/MV3 spelling, Firefox MV2 only knows
+// “browser_action”) and a throwing menus.create must never take the click
+// handler down with it — that is exactly what made 2.0.1 unclickable.
 function setupToolbarMenu() {
     if (!caps.menus) {
         return;
     }
 
-    let created = browser.menus.create({
-        id: MENU_TOGGLE,
-        title: "Switch to the other theme now",
-        contexts: ["action"]
-    });
-    if (created && created.catch) {
-        created.catch((error) => {
-            // A duplicate id only happens when the background page is
-            // re-evaluated; the existing item is still wired below.
-            logDebug("menus.create: " + error);
+    try {
+        let created = browser.menus.create({
+            id: MENU_TOGGLE,
+            title: "Switch to the other theme now",
+            contexts: ["browser_action"]
         });
+        if (created && created.catch) {
+            created.catch((error) => {
+                logDebug("menus.create: " + error);
+            });
+        }
+    } catch (error) {
+        logDebug("menus.create threw: " + error);
     }
 
-    browser.menus.onClicked.addListener((info) => {
-        if (info.menuItemId === MENU_TOGGLE) {
-            toggleFromToolbar();
-        }
-    });
+    try {
+        browser.menus.onClicked.addListener((info) => {
+            if (info.menuItemId === MENU_TOGGLE) {
+                toggleFromToolbar();
+            }
+        });
+    } catch (error) {
+        logDebug("menus.onClicked: " + error);
+    }
 }
 
 function toggleFromToolbar() {
@@ -1137,12 +1148,17 @@ if (browser.runtime && browser.runtime.onMessage) {
         }
     });
 }
+}
 
+// Wired at load, outside setupEventHandlers(): a failure while reading the
+// settings must not leave the toolbar button dead.
 if (caps.browserAction) {
-    setupToolbarMenu();
-
+    // The click handler is registered first, unconditionally: the toolbar
+    // button opening the settings is the primary interaction, the context menu
+    // item is only a convenience.
     browser.browserAction.onClicked.addListener(() => {
         openSettings();
     });
-}
+
+    setupToolbarMenu();
 }

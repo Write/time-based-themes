@@ -548,6 +548,14 @@ function wireTimes() {
 }
 
 function wireLocation() {
+    // Same override as the toolbar menu item, for people who never right-click
+    // (issues #24, #36).
+    on($("toggle-now"), "click", () => {
+        browser.runtime.sendMessage({type: "autodark-toggle"})
+            .then(() => showMessage("toggle-message", "Theme switched."))
+            .catch(onError);
+    });
+
     on($("locate-btn"), "click", () => {
         showMessage("locate-message", "Asking Firefox for your location…");
         setGeolocation().then(() => {

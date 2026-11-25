@@ -71,7 +71,8 @@ function makeStorage() {
     };
 }
 
-function run() {
+function run(options) {
+    options = options || {};
     let storage = makeStorage();
     let calls = {
         setEnabled: [],
@@ -161,6 +162,10 @@ function run() {
         menus: {
             create(details) {
                 calls.menuCreated.push(details);
+                if (options.menusThrow) {
+                    // Firefox MV2 rejects the Chrome/MV3 context spelling.
+                    throw new Error("Invalid value for argument 1: contexts");
+                }
                 return Promise.resolve(details.id);
             },
             onClicked: {
@@ -383,11 +388,7 @@ test("the preview theme is reverted to the schedule afterwards", async () => {
 });
 
 test("the toolbar button opens the settings page", async () => {
-    const {sandbox, calls} = run();
-
-    // The toolbar listeners are wired by setupEventHandlers(), the same entry
-    // point background.js uses.
-    vm.runInContext("setupEventHandlers()", sandbox);
+    const {calls} = run();
 
     assert.strictEqual(calls.actionClicks.length, 1,
         "the background page should register exactly one toolbar click handler");
@@ -396,6 +397,19 @@ test("the toolbar button opens the settings page", async () => {
 
     assert.strictEqual(calls.openOptions, 1,
         "clicking the toolbar button must open the options page");
+});
+
+test("a failing context menu leaves the toolbar click working", async () => {
+    // 2.0.1 registered the menu before the click handler; an invalid context
+    // made the click do nothing at all.
+    const {calls} = run({menusThrow: true});
+
+    assert.strictEqual(calls.actionClicks.length, 1,
+        "the click handler must be registered even when menus.create throws");
+
+    await calls.actionClicks[0]();
+
+    assert.strictEqual(calls.openOptions, 1, "the settings page still opens");
 });
 
 test("the toolbar menu keeps the day/night switch", async () => {
@@ -410,12 +424,12 @@ test("the toolbar menu keeps the day/night switch", async () => {
         "autodarksunsetTime": {time: "20:00"}
     });
 
-    vm.runInContext("setupEventHandlers()", sandbox);
     vm.runInContext("__fixedNow = " + (noonMs + 12 * 3600000) + "; Date.now = () => __fixedNow;", sandbox);
     await vm.runInContext("init().then(() => switch_queue)", sandbox);
 
     assert.strictEqual(calls.menuCreated.length, 1, "one toolbar menu item is created");
-    assert.strictEqual(Array.from(calls.menuCreated[0].contexts).join(","), "action",
+    // MV2 spelling: "action" is the Chrome/MV3 name and Firefox rejects it.
+    assert.strictEqual(Array.from(calls.menuCreated[0].contexts).join(","), "browser_action",
         "the item belongs to the toolbar button");
     assert.strictEqual(calls.menus.length, 1, "the menu click handler is registered");
 
