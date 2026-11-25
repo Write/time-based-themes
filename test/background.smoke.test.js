@@ -669,3 +669,27 @@ test("a built-in dark theme pins the content scheme to dark by day", async () =>
     assert.deepStrictEqual(calls.overrides.slice(-1), ["dark"],
         "dark chrome must not sit over light pages");
 });
+
+test("reports from pages pinned to a scheme cannot flip the theme", async () => {
+    const {sandbox, storage, calls} = run();
+    // Both slots pin a literal scheme: every page then reports that pinned
+    // value instead of the OS one. Trusting it made 2.0.11 alternate between
+    // the day and the night theme forever.
+    await systemSettings(storage, {
+        "autodarkdayScheme": {value: "light"},
+        "autodarknightScheme": {value: "light"}
+    });
+
+    await vm.runInContext("init().then(() => switch_queue)", sandbox);
+    vm.runInContext("setupEventHandlers()", sandbox);
+    const listener = calls.messageListeners[0];
+
+    for (let i = 0; i < 6; i++) {
+        await listener({type: "autodark-scheme", dark: i % 2 === 0});
+        await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+
+    const themes = calls.setEnabled.filter(([, on]) => on === true).map(([id]) => id);
+    const flips = themes.length;
+    assert.ok(flips <= 4, "pinned reports must not make the theme oscillate: " + themes.join(" -> "));
+});

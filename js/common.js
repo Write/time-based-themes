@@ -764,14 +764,63 @@ function setCurrentMode(mode) {
         }, onError);
 }
 
+// An OS report only becomes the truth on its second consecutive sighting.
+//
+// Every page reports the scheme it renders, and a page (or a background media
+// query) can lag behind a theme we just painted, or declare a scheme of its own.
+// Acting on the first report that disagrees made two themes ping-pong forever:
+// theme A looks dark → "the OS is dark" → apply the night theme → it looks
+// light → "the OS is light" → apply the day theme → …
+let pending_os_dark = null;
+
+// Some signals mirror our own theme instead of the OS: a theme declares its
+// color_scheme, so pages (and the SW media query) report that value right
+// after we enable it. Two themes that disagree then ping-pong forever — the
+// 2.0.11 report. A human flipping the OS never does it three times in ten
+// seconds, so a breaker turns the loop off instead of fighting it.
+const FLIP_WINDOW_MS = 10000;
+const FLIP_LIMIT = 2;
+const BREAKER_MS = 30000;
+let flip_times = [];
+let breaker_until = 0;
+
+function recordFlip() {
+    let now = Date.now();
+    flip_times = flip_times.filter((ms) => now - ms < FLIP_WINDOW_MS);
+    flip_times.push(now);
+    if (flip_times.length > FLIP_LIMIT && breaker_until < now) {
+        breaker_until = now + BREAKER_MS;
+        flip_times = [];
+        logDebug("theme flipped " + (FLIP_LIMIT + 1) + " times in "
+            + (FLIP_WINDOW_MS / 1000) + "s: ignoring OS reports for "
+            + (BREAKER_MS / 1000) + "s (a report that mirrors our own theme?).");
+    }
+}
+
+function osReportsBlocked() {
+    return breaker_until > Date.now();
+}
+
 function recordSystemDark(dark, reason) {
     if (system_dark === dark) {
         return Promise.resolve(false);
     }
     system_dark = dark;
     logDebug("System colour scheme is now " + (dark ? "dark" : "light") + " (" + reason + ")");
+    pending_os_dark = null;
     return browser.storage.local.set({ [SYSTEM_DARK_KEY]: { check: dark } })
         .then(() => true, () => true);
+}
+
+// Two sightings of the same value are required before the stored scheme moves.
+function considerSystemDark(dark, reason) {
+    if (pending_os_dark && pending_os_dark.dark === dark) {
+        return recordSystemDark(dark, reason + ", confirmed");
+    }
+    pending_os_dark = {dark: dark, ms: Date.now()};
+    logDebug("OS report (" + reason + "): " + (dark ? "dark" : "light")
+        + " seen once, waiting for confirmation.");
+    return Promise.resolve(false);
 }
 
 // In system-theme mode the content-script reports are the reliable source for
@@ -788,6 +837,9 @@ function syncSystemDarkFromBackground(mode) {
     // Only seed an unknown value: overwriting a stored one would let the
     // browser-theme-following query undo a real OS report on every startup.
     if (system_dark !== null) {
+        return;
+    }
+    if (osReportsBlocked()) {
         return;
     }
     if (background_scheme_query.matches !== system_dark) {
@@ -891,7 +943,11 @@ function applyDesired(s, desired, override, reason) {
         + " (previous " + JSON.stringify(last_applied) + ")");
 
     let modeChanged = last_applied.mode !== mode;
+    let switchedTheme = last_applied.slot !== slot || last_applied.themeId !== themeId;
     last_applied = { slot: slot, themeId: themeId, scheme: contentScheme, mode: mode };
+    if (switchedTheme) {
+        recordFlip();
+    }
 
     return applyContentScheme(contentScheme)
         .then(() => applyThemeId(themeId, mode, themeKey, s))
@@ -1180,27 +1236,9 @@ function setupEventHandlers() {
                 }
                 logDebug("Background media query changed to "
                     + (background_scheme_query.matches ? "dark" : "light"));
-                recordSystemDark(background_scheme_query.matches, "media query")
+                considerSystemDark(background_scheme_query.matches, "media query")
                     .then(() => queueTick("os-change"));
             }, onError);
-        });
-    }
-
-    // theme.onUpdated is the documented OS light/dark signal (Firefox 95+), and
-    // the only one that still arrives when every page has its scheme pinned.
-    // It also fires for our own setEnabled() calls; applyDesired() short-circuits
-    // those because the state it wants is already the state on screen.
-    if (caps.theme && browser.theme && browser.theme.onUpdated
-        && browser.theme.onUpdated.addListener) {
-        browser.theme.onUpdated.addListener((updateInfo) => {
-            let theme = updateInfo && updateInfo.theme;
-            let scheme = theme && theme.color_scheme;
-            let known = scheme === "dark" || scheme === "light";
-            logDebug("theme.onUpdated: " + (known ? scheme : "no scheme reported"));
-            let seed = known
-                ? recordSystemDark(scheme === "dark", "browser theme")
-                : Promise.resolve();
-            seed.then(() => queueTick("os-change")).catch(onError);
         });
     }
 
@@ -1249,6 +1287,19 @@ if (browser.runtime && browser.runtime.onMessage) {
             // every page report that fixed value instead.
             if (message.dark === system_dark) {
                 return;
+            }
+            // A page only speaks for the OS while nothing pins its scheme.
+            // With a literal light/dark content override every page reports
+            // that fixed value, and trusting it made two themes ping-pong
+            // forever (2.0.11 report). Only the media query votes then, and
+            // it needs two sightings (see considerSystemDark).
+            if (osReportsBlocked()) {
+                logDebug("content script OS report ignored: too many flips recently.");
+                return Promise.resolve(true);
+            }
+            if (last_content_scheme && last_content_scheme !== "system") {
+                logDebug("content script OS report ignored: pages are pinned to " + last_content_scheme);
+                return Promise.resolve(true);
             }
             return recordSystemDark(!!message.dark, "content script").then(() => {
                 getSettings().then((s) => {
