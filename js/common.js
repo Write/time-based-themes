@@ -1063,20 +1063,27 @@ function handleSchemeReport(dark, reason) {
 // but still catches genuine OS changes in many setups.
 const background_scheme_query = window.matchMedia("(prefers-color-scheme: dark)");
 
-function syncSystemDarkFromBackground(mode) {
-    if (mode !== "system-theme" || last_content_scheme === "system") {
+function syncSystemDarkFromBackground(mode, reason) {
+    if (mode !== "system-theme" || osReportsBlocked()) {
         return;
     }
-    // Only seed an unknown value: overwriting a stored one would let the
-    // browser-theme-following query undo a real OS report on every startup.
-    if (system_dark !== null) {
+    // On a cold start (extension reload, browser restart, wake from sleep) the
+    // stored value describes the *previous* run. Trusting it is why reloading
+    // the extension kept the wrong slot until a page happened to report: the
+    // live query is the OS, the stored value is history. In system-theme mode
+    // the theme we keep active declares color_scheme "system", so this query
+    // follows the OS even though it reads the browser theme.
+    // Cold-start reasons only: "os-change" is deliberately excluded, its value
+    // comes from a page that read the OS in the content process and must not be
+    // undone by a media query that has not caught up yet.
+    let startup = system_dark === null
+        || reason === "startup" || reason === "install" || reason === "focus";
+    if (!startup) {
         return;
     }
-    if (osReportsBlocked()) {
-        return;
-    }
-    if (background_scheme_query.matches !== system_dark) {
-        recordSystemDark(background_scheme_query.matches, "background media query");
+    let live = background_scheme_query.matches;
+    if (live !== system_dark) {
+        recordSystemDark(live, "background media query on " + reason);
     }
 }
 
@@ -1088,7 +1095,7 @@ function tick(reason) {
 
         // Seed the OS scheme when no page has reported one yet (fresh install,
         // a browser restarted while no content script was running).
-        syncSystemDarkFromBackground(s.changeMode);
+        syncSystemDarkFromBackground(s.changeMode, reason);
 
         if (s.startupOnly && STARTUP_BYPASS_REASONS.indexOf(reason) === -1) {
             logDebug("tick ignored: change-on-startup-only is enabled.");
@@ -1190,7 +1197,7 @@ function applyDesired(s, desired, override, reason) {
         .then(() => (modeChanged ? browser.storage.local.set({ [LAST_MODE_KEY]: { mode: mode } }) : undefined))
         .then(() => {
             updateToolbarTitle(slot);
-            syncSystemDarkFromBackground(mode);
+            syncSystemDarkFromBackground(mode, reason);
         })
         .catch(onError);
 }

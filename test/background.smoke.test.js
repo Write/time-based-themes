@@ -236,7 +236,7 @@ function run(options) {
         FileReader: FileReaderStub,
         window: {
             matchMedia: () => ({
-                matches: false,
+                matches: !!options.mediaDark,
                 addEventListener() {},
                 addListener() {}
             })
@@ -318,7 +318,7 @@ test("a tick at night switches to the nighttime theme once", async () => {
 });
 
 test("system-theme mode keeps the OS signal observable with images inlined", async () => {
-    const {sandbox, storage, calls} = run();
+    const {sandbox, storage, calls} = run({mediaDark: true});
     const noonMs = Date.now() - (Date.now() % 86400000);
 
     await storage.api.set({
@@ -538,14 +538,33 @@ test("a content script report flips the theme without waiting for an alarm", asy
         "a dark OS report must switch to the nighttime theme immediately");
 });
 
-test("the OS scheme survives a browser restart", async () => {
+// Reloading the extension must re-read the OS instead of trusting the stored
+// value: the stored one describes the previous run, so a reload during the night
+// used to come back with the daytime theme and stay there.
+test("a reload corrects a stale stored OS scheme", async () => {
+    const {sandbox, storage, calls} = run();
+    // Storage says "dark" (the OS was dark last time), the live query says light.
+    await systemSettings(storage, {"autodarksystemDark": {check: true}});
+
+    await vm.runInContext("init().then(() => switch_queue)", sandbox);
+
+    assert.strictEqual(lastTheme(calls), "my-day@x",
+        "the live OS scheme must win over the stored one at startup");
+    assert.strictEqual(storage.data["autodarksystemDark"].check, false,
+        "the corrected value must be persisted for the next start");
+});
+
+// The stored scheme is a hint, not the truth: a restart must re-read the OS.
+// (Keeping the stored value regardless is what made a reload during the night
+// come back on the daytime theme.)
+test("a cold start follows the live OS scheme, not the stored one", async () => {
     const {sandbox, storage, calls} = run();
     await systemSettings(storage, {"autodarksystemDark": {check: true}});
 
     await vm.runInContext("init().then(() => switch_queue)", sandbox);
 
-    assert.strictEqual(lastTheme(calls), "my-night@x",
-        "a stored dark OS must be honoured on a cold start");
+    assert.strictEqual(lastTheme(calls), "my-day@x",
+        "the live query says light, so the stored dark value must not survive");
 });
 
 test("system mode keeps pages on the OS scheme even when one is pinned", async () => {
