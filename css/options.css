@@ -53,14 +53,12 @@ header h1 {
     font-size: 1.25rem;
 }
 
+/* The header icon used to be three mode-specific images hidden by default and
+   revealed by a body class; when that class was missing (or the mode had no
+   rule) no icon appeared at all. One image, always visible. */
 .logo {
-    display: none;
-}
-
-body.mode-system-theme .logo.system-mode,
-body.mode-manual-suntimes .logo.day-mode,
-body.mode-location-suntimes .logo.day-mode {
     display: inline-block;
+    border-radius: 6px;
 }
 
 .status {
