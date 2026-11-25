@@ -796,6 +796,11 @@ function renderDiagnostics() {
         let enabled = (extensions || []).filter((e) => e.type === "theme" && e.enabled)
             .map((e) => e.name + " <" + e.id + ">");
         lines.push("enabled themes: " + (enabled.join(", ") || "none reported"));
+        let events = storage["autodarkevents"];
+        lines.push("recent events (newest last):");
+        ((events && events.check) || []).slice(-15).forEach((event) => {
+            lines.push("  " + event.t + "  " + event.kind + "  " + event.detail);
+        });
         node.textContent = lines.join("\n");
     }, (error) => {
         node.textContent = "diagnostics failed: " + error;

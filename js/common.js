@@ -802,6 +802,25 @@ let pending_os_dark = null;
 const FLIP_WINDOW_MS = 10000;
 const FLIP_LIMIT = 2;
 const BREAKER_MS = 30000;
+const EVENTS_KEY = "autodarkevents";
+const EVENTS_MAX = 40;
+let recent_events = [];
+
+// Ring buffer of the last decisions the background made. Without it every
+// "it still switches" report needs a guess: the log says *that* a tick ran,
+// never why the stored scheme moved.
+function pushEvent(kind, detail) {
+    recent_events.push({t: new Date().toISOString().slice(11, 19), kind: kind, detail: String(detail)});
+    if (recent_events.length > EVENTS_MAX) {
+        recent_events = recent_events.slice(-EVENTS_MAX);
+    }
+    try {
+        browser.storage.local.set({[EVENTS_KEY]: {check: recent_events}});
+    } catch (error) {
+        // never let diagnostics break the tick
+    }
+}
+
 let flip_times = [];
 let breaker_until = 0;
 
@@ -809,6 +828,7 @@ function recordFlip() {
     let now = Date.now();
     flip_times = flip_times.filter((ms) => now - ms < FLIP_WINDOW_MS);
     flip_times.push(now);
+    pushEvent("flip", "theme switch #" + flip_times.length + " in " + (FLIP_WINDOW_MS / 1000) + "s");
     if (flip_times.length > FLIP_LIMIT && breaker_until < now) {
         breaker_until = now + BREAKER_MS;
         flip_times = [];
@@ -827,6 +847,7 @@ function recordSystemDark(dark, reason) {
         return Promise.resolve(false);
     }
     system_dark = dark;
+    pushEvent("os", (dark ? "dark" : "light") + " <- " + reason);
     logDebug("System colour scheme is now " + (dark ? "dark" : "light") + " (" + reason + ")");
     pending_os_dark = null;
     return browser.storage.local.set({ [SYSTEM_DARK_KEY]: { check: dark } })
@@ -963,6 +984,8 @@ function applyDesired(s, desired, override, reason) {
     logDebug("tick: " + slot + " / " + themeId + " / scheme=" + contentScheme
         + " (previous " + JSON.stringify(last_applied) + ")");
 
+    pushEvent("apply", slot + " " + themeId + " mode=" + mode + " os=" + system_dark
+        + " reason=" + reason);
     let modeChanged = last_applied.mode !== mode;
     let switchedTheme = last_applied.slot !== slot || last_applied.themeId !== themeId;
     last_applied = { slot: slot, themeId: themeId, scheme: contentScheme, mode: mode };
@@ -1257,8 +1280,20 @@ function setupEventHandlers() {
                 }
                 logDebug("Background media query changed to "
                     + (background_scheme_query.matches ? "dark" : "light"));
+                if (osReportsBlocked()) {
+                    logDebug("background media query report ignored: too many flips recently.");
+                    return;
+                }
+                // The query follows the browser theme, so it reports whatever
+                // our own theme declares. Only tick when the two-sighting vote
+                // actually moved the value; ticking on every observation made
+                // it loop forever.
                 considerSystemDark(background_scheme_query.matches, "media query")
-                    .then(() => queueTick("os-change"));
+                    .then((moved) => {
+                        if (moved) {
+                            queueTick("os-change");
+                        }
+                    });
             }, onError);
         });
     }
