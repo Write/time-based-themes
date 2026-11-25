@@ -313,6 +313,24 @@ function addSlot() {
 // Persisting
 // ---------------------------------------------------------------------------
 
+// There is no Save button: every control persists on its change event. Say so
+// visibly, otherwise the page looks like it silently swallows edits (#28).
+let flashTimer = 0;
+
+function flashSaved() {
+    let line = $("save-state");
+    if (!line) {
+        return;
+    }
+    line.textContent = "Saved \u2713 \u2014 every change is stored automatically.";
+    line.classList.add("saved");
+    clearTimeout(flashTimer);
+    flashTimer = setTimeout(() => {
+        line.textContent = "Every change is saved automatically as soon as you leave the field.";
+        line.classList.remove("saved");
+    }, 2500);
+}
+
 function persist(values) {
     saving = true;
     return setStorage(values)
@@ -326,6 +344,7 @@ function persist(values) {
         .catch(onError)
         .then(() => {
             saving = false;
+            flashSaved();
         });
 }
 
@@ -736,5 +755,16 @@ function start() {
         }
     }, 30000);
 }
+
+// A field being edited when the tab closes never fires its change event, so a
+// freshly typed coordinate used to be lost. Commit everything on the way out.
+window.addEventListener("pagehide", () => {
+    document.querySelectorAll("input, select, textarea").forEach((element) => {
+        if (element.type === "checkbox" || element.type === "radio") {
+            return;
+        }
+        element.dispatchEvent(new Event("change"));
+    });
+});
 
 start();

@@ -77,6 +77,17 @@ body.mode-location-suntimes .logo.day-mode {
     flex-wrap: wrap;
 }
 
+.save-state {
+    margin: 0.5rem 0 0;
+    color: var(--muted);
+    font-size: 0.85rem;
+}
+
+.save-state.saved {
+    color: #2e7d32;
+    font-weight: 600;
+}
+
 main {
     max-width: 46rem;
     margin: 0 auto;
