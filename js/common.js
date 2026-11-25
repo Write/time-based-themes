@@ -1003,7 +1003,9 @@ function pushEvent(kind, detail) {
 // mode the theme we keep active always declares color_scheme "system", so the
 // query reports the OS and never our own colours.
 const SCHEME_POLL_MS = 2000;
+const POLL_BEATS_KEY = KEY_PREFIX + "pollBeats";
 let scheme_poll_timer = null;
+let poll_beats = 0;
 
 function recordSystemDark(dark, reason) {
     debugLog("os-record", (dark ? "dark" : "light") + " (" + reason + "), was " + system_dark);
@@ -1063,6 +1065,19 @@ function startSchemePoll(mode) {
     }
     logDebug("OS scheme polling every " + SCHEME_POLL_MS + "ms.");
     scheme_poll_timer = setInterval(() => {
+        poll_beats += 1;
+        if (poll_beats % 10 === 0) {
+            // A heartbeat, persisted: if this number grows the timer runs, if it
+            // freezes the page was suspended and no polling can ever work.
+            try {
+                browser.storage.local.set({[POLL_BEATS_KEY]: {
+                    count: poll_beats,
+                    at: new Date().toISOString().slice(11, 19)
+                }});
+            } catch (error) {
+                // diagnostics only
+            }
+        }
         let live = background_scheme_query.matches;
         if (live === system_dark) {
             return;

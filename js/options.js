@@ -792,6 +792,9 @@ function renderDiagnostics() {
         lines.push("dayScheme: " + JSON.stringify(storage["autodarkdayScheme"]));
         lines.push("nightScheme: " + JSON.stringify(storage["autodarknightScheme"]));
         lines.push("startupOnly: " + JSON.stringify(storage["autodarkstartupOnly"]));
+        let poll = storage["autodarkpollBeats"] || {};
+        lines.push("poll beats (2s OS poll, written every 10): " + JSON.stringify(poll.count)
+            + (poll.at ? " last at " + poll.at : ""));
         lines.push("alarm beats (minutely tick fired): "
             + JSON.stringify(storage["autodarkalarmBeats"] && storage["autodarkalarmBeats"].count));
         lines.push("scheduled alarms: " + (alarms === null ? "alarms API unavailable"
