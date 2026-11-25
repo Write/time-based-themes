@@ -693,3 +693,24 @@ test("reports from pages pinned to a scheme cannot flip the theme", async () => 
     const flips = themes.length;
     assert.ok(flips <= 4, "pinned reports must not make the theme oscillate: " + themes.join(" -> "));
 });
+
+// A theme that declares a literal color_scheme makes every page report that
+// value, so the extension reads its own decision back as an OS signal and the
+// two slots alternate forever. In system-theme mode the active theme must
+// therefore be one that follows the OS.
+test("system-theme mode never keeps a literal-scheme built-in theme active", async () => {
+    const {sandbox, storage, calls} = run();
+    sandbox.__fixedNow = Date.now() - (Date.now() % 86400000) + 12 * 3600000;
+    vm.runInContext("Date.now = () => __fixedNow;", sandbox);
+
+    await systemSettings(storage, {
+        "autodarkdaytimeTheme": {themeId: "firefox-compact-light@mozilla.org"}
+    });
+    await vm.runInContext("init().then(() => switch_queue)", sandbox);
+
+    assert.ok(!calls.setEnabled.some(([id, on]) => on === true
+        && (id === "firefox-compact-light@mozilla.org" || id === "firefox-compact-dark@mozilla.org")),
+        "a literal-scheme theme must not be enabled in system-theme mode");
+    assert.strictEqual(lastTheme(calls), "default-theme@mozilla.org",
+        "the System theme is the only built-in one that follows the OS");
+});

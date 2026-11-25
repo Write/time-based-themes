@@ -664,6 +664,26 @@ function applyCustomTheme(spec, mode) {
         .catch(onError);
 }
 
+// A theme that declares a literal color_scheme pins prefers-color-scheme for
+// every page and for the background media query: the extension then reads its
+// own last decision back as if it came from the OS, and two slots that disagree
+// alternate forever (the 2.0.12/2.0.13 report of an infinite light/dark loop).
+// So in system-theme mode the chrome theme itself has to declare "system":
+// a user picking Light or Dark there gets the System theme, which is the only
+// built-in one that follows the OS anyway.
+const SYSTEM_FOLLOWING_THEME_ID = "default-theme@mozilla.org";
+
+function systemFollowingThemeId(themeId, mode) {
+    if (mode !== "system-theme" || !themeId) {
+        return themeId;
+    }
+    if (themeId === "firefox-compact-light@mozilla.org"
+        || themeId === "firefox-compact-dark@mozilla.org") {
+        return SYSTEM_FOLLOWING_THEME_ID;
+    }
+    return themeId;
+}
+
 function applyThemeId(themeId, mode, themeKey, s) {
     if (!caps.theme || !caps.management) {
         logDebug("applyThemeId: no theme API available (Thunderbird?), skipping.");
@@ -675,7 +695,8 @@ function applyThemeId(themeId, mode, themeKey, s) {
         return Promise.resolve();
     }
 
-    let resolvedId = substituteBuiltInTheme(themeId, themeKey, s || {});
+    let resolvedId = systemFollowingThemeId(
+        substituteBuiltInTheme(themeId, themeKey, s || {}), mode);
     let spec = themeSpecFor(resolvedId, s || {});
     if (!spec) {
         logDebug("applyThemeId: " + resolvedId + " is not available.");
