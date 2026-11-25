@@ -774,10 +774,13 @@ function renderDiagnostics() {
             : Promise.resolve(null),
         browser.management && browser.management.getAll
             ? browser.management.getAll().catch(() => [])
-            : Promise.resolve([])
+            : Promise.resolve([]),
+        browser.alarms && browser.alarms.getAll
+            ? browser.alarms.getAll().catch((e) => [{error: String(e)}])
+            : Promise.resolve(null)
     ];
 
-    Promise.all(calls).then(([storage, current, override, extensions]) => {
+    Promise.all(calls).then(([storage, current, override, extensions, alarms]) => {
         lines.push("media query (prefers-color-scheme: dark): "
             + (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"));
         lines.push("changeMode: " + JSON.stringify(storage["autodarkchangeMode"]));
@@ -789,6 +792,11 @@ function renderDiagnostics() {
         lines.push("dayScheme: " + JSON.stringify(storage["autodarkdayScheme"]));
         lines.push("nightScheme: " + JSON.stringify(storage["autodarknightScheme"]));
         lines.push("startupOnly: " + JSON.stringify(storage["autodarkstartupOnly"]));
+        lines.push("alarm beats (minutely tick fired): "
+            + JSON.stringify(storage["autodarkalarmBeats"] && storage["autodarkalarmBeats"].count));
+        lines.push("scheduled alarms: " + (alarms === null ? "alarms API unavailable"
+            : (alarms || []).map((a) => a.name + " every " + a.periodInMinutes + "min"
+                + (a.error ? " (" + a.error + ")" : "")).join(", ") || "NONE"));
         lines.push("overrideContentColorScheme: "
             + JSON.stringify(override && (override.value || override.error)));
         let scheme = current && current.properties && current.properties.color_scheme;

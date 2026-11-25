@@ -47,17 +47,35 @@ function debugLog(tag, detail) {
         debug_trace = debug_trace.slice(-DEBUG_LOG_MAX);
     }
     logDebug(tag + ": " + detail);
-    if (typeof browser !== "undefined" && browser.storage && browser.storage.local) {
-        try {
-            let call = browser.storage.local.set({[DEBUG_LOG_KEY]: {check: debug_trace}});
-            if (call && typeof call.catch === "function") {
-                call.catch(() => {});
-            }
-        } catch (error) {
-            // never let tracing break a tick
-        }
-    }
+    debugPersist();
     return detail;
+}
+
+// Writes are chained instead of fired blindly: an event page can be torn down
+// the moment its handler resolves, and a write issued a millisecond before that
+// is simply lost (this is why a run that did work left an empty trace).
+let debug_write = null;
+
+function debugPersist() {
+    if (typeof browser === "undefined" || !browser.storage || !browser.storage.local) {
+        return debug_write;
+    }
+    try {
+        let call = browser.storage.local.set({[DEBUG_LOG_KEY]: {check: debug_trace.slice()}});
+        debug_write = Promise.resolve(call).catch(() => {});
+    } catch (error) {
+        // never let tracing break a tick
+    }
+    return debug_write;
+}
+
+// Await this before letting a handler return: keeps the page alive until the
+// trace is really stored.
+function debugFlush() {
+    if (!debug_write) {
+        debugPersist();
+    }
+    return Promise.resolve(debug_write).catch(() => {});
 }
 
 // Load what the previous run left behind, so a restart does not erase the trace

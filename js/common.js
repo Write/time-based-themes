@@ -1198,7 +1198,12 @@ function applyDesired(s, desired, override, reason) {
 }
 
 function queueTick(reason) {
-    const result = switch_queue.then(() => tick(reason));
+    const result = switch_queue.then(() => tick(reason)).then((value) => {
+        // Keep the event page alive until the trace is stored: writes fired just
+        // before teardown were being dropped, which made a working run look like
+        // an empty log.
+        return debugFlush().then(() => value);
+    });
     switch_queue = result.then(() => {}, onError);
     return result;
 }
@@ -1333,13 +1338,33 @@ function ensureTickAlarm(s) {
 }
 
 function alarmListener(alarmInfo) {
-    if (alarmInfo && alarmInfo.name === TICK_ALARM_NAME) {
-        // The alarm is the only thing that wakes this page up, so it cannot
-        // assume init() already ran: do it here when needed.
-        ensureInitialised();
-        queueTick("alarm");
+    if (!alarmInfo || alarmInfo.name !== TICK_ALARM_NAME) {
+        return;
     }
+    debugLog("alarm", "#" + (alarm_beats + 1) + " fired");
+    alarm_beats += 1;
+    try {
+        browser.storage.local.set({[ALARM_BEATS_KEY]: {count: alarm_beats}});
+    } catch (error) {
+        // diagnostics only
+    }
+    // The alarm is the only thing that wakes this page up, so it cannot assume
+    // init() already ran: wait for it, then tick.
+    ensureInitialised().then(() => queueTick("alarm"), onError);
 }
+
+// How many times the minutely alarm actually fired. If this stops growing, the
+// alarm is the problem; if it grows and the theme still does not switch, the
+// problem is downstream. Without this number both cases look identical.
+const ALARM_BEATS_KEY = KEY_PREFIX + "alarmBeats";
+let alarm_beats = 0;
+
+browser.storage.local.get(ALARM_BEATS_KEY).then((obj) => {
+    let stored = obj && obj[ALARM_BEATS_KEY] && obj[ALARM_BEATS_KEY].count;
+    if (typeof stored === "number" && stored > alarm_beats) {
+        alarm_beats = stored;
+    }
+}, () => {});
 
 // Firefox only honours an event listener that was registered *synchronously*
 // while the background script is being evaluated. The alarm listener used to be
