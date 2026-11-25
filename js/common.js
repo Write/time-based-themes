@@ -557,7 +557,30 @@ function resetOverlay(force) {
         return Promise.resolve();
     }
     overlay_applied = false;
+    setOverlayOwner(null);
     return browser.theme.reset().catch(onError);
+}
+
+// Which theme the painted overlay was built for. A module flag cannot survive a
+// background restart, and without knowing the owner the extension cannot tell
+// "my overlay already shows this theme" from "a stale overlay hides it".
+const OVERLAY_OWNER_KEY = KEY_PREFIX + "overlayowner";
+
+function overlayOwner() {
+    return browser.storage.local.get(OVERLAY_OWNER_KEY)
+        .then((obj) => (obj[OVERLAY_OWNER_KEY] ? obj[OVERLAY_OWNER_KEY].themeId : null))
+        .catch(() => null);
+}
+
+function setOverlayOwner(themeId) {
+    if (!browser.storage || !browser.storage.local) {
+        return;
+    }
+    if (themeId) {
+        browser.storage.local.set({[OVERLAY_OWNER_KEY]: {themeId: themeId}});
+    } else {
+        browser.storage.local.remove(OVERLAY_OWNER_KEY);
+    }
 }
 
 // A theme.update() overlay always declares its own color_scheme, and a static
@@ -599,7 +622,12 @@ function paintedTheme(attempt) {
 
 // Make sure the enabled theme follows the OS, so that the OS signal can still
 // be observed (issues #11, #42, #43, #64).
-function ensureColorSchemeSystem() {
+//
+// `themeId` is only used to remember which theme the overlay belongs to: after
+// a background restart a module flag knows nothing about a painted overlay, and
+// `applyThemeId` needs that to tell "my overlay already shows this theme" from
+// "a leftover overlay hides it".
+function ensureColorSchemeSystem(themeId) {
     if (!caps.theme) {
         return Promise.resolve();
     }
@@ -613,6 +641,7 @@ function ensureColorSchemeSystem() {
             // A theme that already follows the OS needs no overlay, and an
             // overlay we own is already in place.
             if (current.properties && current.properties.color_scheme === "system") {
+                setOverlayOwner(null);
                 return;
             }
 
@@ -623,6 +652,7 @@ function ensureColorSchemeSystem() {
 
             return embedThemeImages(theme).then((ready) => {
                 overlay_applied = true;
+                setOverlayOwner(themeId);
                 return browser.theme.update(ready).catch((error) => {
                     // Some artwork cannot be re-sent at all. The overlay exists
                     // for color_scheme: "system", not for the images, so retry
@@ -662,14 +692,14 @@ function enableInstalledTheme(themeId, mode) {
                 return browser.management.setEnabled(themeId, true)
                     .then(() => {
                         if (mode === "system-theme") {
-                            return ensureColorSchemeSystem();
+                            return ensureColorSchemeSystem(themeId);
                         }
                     });
             }
             logDebug(themeId + " is already enabled.");
             // Switching into system-theme mode while the right theme is
             // already enabled still needs the color_scheme workaround.
-            return mode === "system-theme" ? ensureColorSchemeSystem() : undefined;
+            return mode === "system-theme" ? ensureColorSchemeSystem(themeId) : undefined;
         })
         .catch(onError);
 }
@@ -775,10 +805,37 @@ function applyThemeId(themeId, mode, themeKey, s) {
     // theme we are about to enable, and the color_scheme snapshot would then be
     // taken from that stale overlay. `overlay_applied` cannot be trusted for
     // this, so ask the browser what is painted.
-    return overlayLooksActive()
-        .then((overlay) => resetOverlay(mode === "system-theme" && overlay))
-        .then(() => enableInstalledTheme(spec.id, mode))
-        .then(() => (mode === "system-theme" ? ensurePainted(spec.id) : undefined));
+    // Rebuilding the overlay on every tick churns the paint (and the media query
+    // the OS signal comes from), so an overlay that already shows this theme is
+    // left alone; anything else is dropped first, because a leftover overlay
+    // hides the theme we are about to enable.
+    return overlayOwner().then((owner) => {
+        if (mode === "system-theme" && owner === spec.id) {
+            logDebug("applyThemeId: overlay for " + spec.id + " already in place.");
+            return;
+        }
+        let droppedOverlay = false;
+        return overlayLooksActive().then((overlay) => {
+            droppedOverlay = !!(mode === "system-theme" && overlay);
+            return resetOverlay(droppedOverlay);
+        })
+            .then(() => enableInstalledTheme(spec.id, mode))
+            .then(() => {
+                if (!droppedOverlay) {
+                    return undefined;
+                }
+                // The overlay was dropped, so the theme now paints with
+                // whatever color_scheme it declares — a literal one pins every
+                // page to it and the OS signal disappears ("it does not toggle
+                // any more on a system-wide colour scheme change"). Repaint the
+                // theme, then rebuild the workaround on top of it: dropping the
+                // overlay without rebuilding it silently disables system-theme
+                // following.
+                return ensurePainted(spec.id).then(() => (mode === "system-theme"
+                    ? ensureColorSchemeSystem(spec.id)
+                    : undefined));
+            });
+    });
 }
 
 // Exposed for the options page preview button (issue #61): the candidate theme

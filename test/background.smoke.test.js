@@ -766,6 +766,59 @@ test("the color_scheme workaround keeps an image theme's artwork", async () => {
     assert.strictEqual(overlay.properties.color_scheme, "system");
 });
 
+test("the workaround is rebuilt after a stale overlay is dropped", async () => {
+    // Dropping a leftover overlay is only half the job. After theme.reset() the
+    // default theme paints, which reports no colours; the theme then paints with
+    // whatever color_scheme it declares, a literal one pins every page to it and
+    // the OS signal disappears ("it does not toggle any more on a system-wide
+    // colour scheme change"). The overlay has to be rebuilt once it is painted.
+    const staleOverlay = {
+        colors: {frame: "#000000", toolbar: "#000000"},
+        properties: {color_scheme: "system"}
+    };
+    const nightTheme = {
+        colors: {frame: "#141b1e", toolbar: "#1c1b22"},
+        properties: {color_scheme: "dark"}
+    };
+    let harness;
+    const h = run({
+        getCurrent: () => {
+            if (harness.calls.themeReset === 0) {
+                return staleOverlay;
+            }
+            // After the reset the default theme paints: no colours at all until
+            // the repaint re-enables the theme (bug 1415267).
+            return harness.calls.setEnabled.length > 1 ? nightTheme : {};
+        }
+    });
+    harness = h;
+    const {sandbox, storage, calls} = h;
+
+    await storage.api.set({
+        "autodarkchangeMode": {mode: "system-theme"},
+        "autodarkdaytimeTheme": {themeId: "my-day@x"},
+        "autodarknighttimeTheme": {themeId: "my-night@x"},
+        "autodarksystemDark": {check: true}
+    });
+    // The theme is already enabled (a background restart keeps it), and an
+    // overlay from the previous session is still painted.
+    await vm.runInContext("browser.management.setEnabled('my-night@x', true)", sandbox);
+    vm.runInContext("last_applied = {}; overlay_applied = false;", sandbox);
+
+    await vm.runInContext(
+        'applyThemeId("my-night@x", "system-theme", "autodarknighttimeTheme", {})', sandbox);
+
+    assert.ok(calls.themeReset >= 1, "the stale overlay must be dropped first");
+    assert.ok(calls.setEnabled.length >= 2,
+        "the theme must be repainted before the overlay is rebuilt");
+    const overlay = calls.themeUpdate[calls.themeUpdate.length - 1];
+    assert.ok(overlay, "the workaround must be rebuilt after the repaint");
+    assert.deepStrictEqual(overlay.colors, nightTheme.colors,
+        "the rebuilt overlay must carry the painted theme's colours");
+    assert.strictEqual(overlay.properties.color_scheme, "system",
+        "the rebuilt overlay must make pages follow the OS again");
+});
+
 test("the overlay waits until the new theme is painted", async () => {
     // Called too early, theme.getCurrent() still reports the previous theme and
     // the overlay repaints those old colours in the new slot.
