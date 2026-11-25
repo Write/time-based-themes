@@ -127,6 +127,11 @@ function run(options) {
             get: (id) => Promise.resolve({id: id, enabled: enabledThemes[id] === true}),
             setEnabled: (id, enabled) => {
                 calls.setEnabled.push([id, enabled]);
+                if (options.hangSetEnabled) {
+                    // A browser call that never settles: this is what used to
+                    // freeze the whole switch queue for the rest of the session.
+                    return new Promise(() => {});
+                }
                 if (enabled) {
                     // Firefox keeps a single theme enabled: activating one
                     // deactivates the others.
@@ -227,6 +232,15 @@ function run(options) {
         // Real timers, but every delay is clamped: the preview restore in
         // previewTheme() then becomes observable in milliseconds.
         setTimeout: (fn, ms) => setTimeout(fn, Math.min(ms || 0, 5)),
+        // Real-clock deadline for withTimeout(): not clamped to the fake clock,
+        // and unref'd so it never keeps the test runner alive.
+        __scheduleDeadline: (fn, ms) => {
+            let timer = setTimeout(fn, ms);
+            if (timer && typeof timer.unref === "function") {
+                timer.unref();
+            }
+            return timer;
+        },
         clearTimeout: clearTimeout,
         Promise: Promise,
         Date: Date,
@@ -260,6 +274,10 @@ function run(options) {
         navigator: {}
     };
     vm.createContext(sandbox);
+    // The harness clamps setTimeout to 5ms so retry loops finish fast; that also
+    // arms the withTimeout() deadline immediately, so it is parked far away here
+    // and only the timeout tests bring it back.
+
 
     // One script: the background page shares a single global lexical scope
     // between its classic scripts, so the files are concatenated.
@@ -267,6 +285,10 @@ function run(options) {
         .map((file) => fs.readFileSync(path.join(ROOT, file), "utf8"))
         .join("\n;\n");
     vm.runInContext(source, sandbox, {filename: "background-bundle.js"});
+
+    // The harness clamps setTimeout to 5ms so retry loops finish fast; park the
+    // withTimeout() deadline far away, the timeout tests bring it back.
+    sandbox.__with_timeout_ms = 60000;
 
     return {sandbox: sandbox, storage: storage, calls: calls, enabledThemes: enabledThemes};
 }
@@ -330,6 +352,31 @@ test("a tick at night switches to the nighttime theme once", async () => {
         "the same theme must not be re-enabled on every tick");
 
     assert.deepStrictEqual(calls.overrides.slice(-1), ["dark"]);
+});
+
+test("a never-settling browser call fails instead of freezing the queue", async () => {
+    const {sandbox, storage, calls} = run({hangSetEnabled: true});
+    await systemSettings(storage);
+    sandbox.__with_timeout_ms = 15;
+
+    await vm.runInContext("init()", sandbox);
+    assert.strictEqual(calls.themeUpdate.length, 0, "nothing was painted");
+
+    // The tick gave up, and - the point of the deadline - the queue is free:
+    // a later tick still works instead of waiting forever.
+    await vm.runInContext("queueTick('toolbar').catch((e) => e.message)", sandbox);
+    assert.ok(calls.setEnabled.length >= 2, "the next tick ran instead of hanging behind it");
+});
+
+// A deadline is only useful if the caller sees it: preview and toolbar clicks
+// used to wait on a promise that never settled, so the UI silently did nothing.
+test("withTimeout rejects with the stuck call's name", async () => {
+    const {sandbox} = run();
+    sandbox.__with_timeout_ms = 15;
+    const message = await vm.runInContext(
+        "withTimeout(new Promise(() => {}), 'theme.update').then(() => 'resolved', (e) => e.message)",
+        sandbox);
+    assert.strictEqual(message, "timeout after 15ms: theme.update");
 });
 
 test("system-theme mode keeps the OS signal observable with images inlined", async () => {
@@ -880,6 +927,7 @@ test("the overlay waits until the new theme is painted", async () => {
         properties: {color_scheme: "dark"}
     };
     const {sandbox, storage, calls} = run({
+        mediaDark: true,
         getCurrent: (count) => (count <= 2 ? {} : night)
     });
     const noonMs = Date.now() - (Date.now() % 86400000);

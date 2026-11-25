@@ -50,6 +50,61 @@ const TICK_ALARM_NAME = KEY_PREFIX + "tick";
 // the schedule is restored (issue #61).
 const PREVIEW_DURATION_MS = 20000;
 
+// Every browser call below is given a deadline (issue: "nothing works, not even
+// the button, can't even preview").
+//
+// A single never-settling promise used to poison `switch_queue` for the rest of
+// the session: every later tick, toolbar click and preview queued behind it and
+// nothing ever happened again. Failing loudly after a few seconds keeps the
+// extension alive and surfaces the stuck call instead of hiding it.
+let with_timeout_ms = 5000;
+
+// Tests run with a fake clock, so they need to move the deadline themselves.
+function timeoutDeadline() {
+    return typeof __with_timeout_ms === "number" ? __with_timeout_ms : with_timeout_ms;
+}
+
+// The deadline runs on the real clock even when the rest of the code is on a
+// fake one (the test harness provides the hook).
+function scheduleDeadline(callback, delay) {
+    if (typeof __scheduleDeadline === "function") {
+        return __scheduleDeadline(callback, delay);
+    }
+    return setTimeout(callback, delay);
+}
+
+function withTimeout(promise, label) {
+    return new Promise((resolve, reject) => {
+        let settled = false;
+        let deadline = timeoutDeadline();
+        let timer = scheduleDeadline(() => {
+            if (settled) {
+                return;
+            }
+            settled = true;
+            let error = new Error("timeout after " + deadline + "ms: " + label);
+            pushEvent("timeout", label);
+            logDebug(error.message);
+            reject(error);
+        }, deadline);
+        Promise.resolve(promise).then((value) => {
+            if (settled) {
+                return;
+            }
+            settled = true;
+            clearTimeout(timer);
+            resolve(value);
+        }, (error) => {
+            if (settled) {
+                return;
+            }
+            settled = true;
+            clearTimeout(timer);
+            reject(error);
+        });
+    });
+}
+
 // Theme values that are not installed theme ids.
 const CUSTOM_THEME_PREFIX = "custom:";
 const CUSTOM_DAY = CUSTOM_THEME_PREFIX + "day";
@@ -797,7 +852,7 @@ function applyThemeId(themeId, mode, themeKey, s) {
     }
 
     if (spec.kind === "custom") {
-        return applyCustomTheme(spec, mode);
+        return withTimeout(applyCustomTheme(spec, mode), "theme.update (custom)");
     }
 
     // Drop any overlay before enabling the static theme: a leftover one — from
@@ -809,17 +864,19 @@ function applyThemeId(themeId, mode, themeKey, s) {
     // the OS signal comes from), so an overlay that already shows this theme is
     // left alone; anything else is dropped first, because a leftover overlay
     // hides the theme we are about to enable.
-    return overlayOwner().then((owner) => {
+    let guard = (promise, label) => withTimeout(promise, label);
+
+    return guard(overlayOwner(), "theme.getCurrent").then((owner) => {
         if (mode === "system-theme" && owner === spec.id) {
             logDebug("applyThemeId: overlay for " + spec.id + " already in place.");
             return;
         }
         let droppedOverlay = false;
-        return overlayLooksActive().then((overlay) => {
+        return guard(overlayLooksActive(), "theme.getCurrent (overlay)").then((overlay) => {
             droppedOverlay = !!(mode === "system-theme" && overlay);
-            return resetOverlay(droppedOverlay);
+            return guard(resetOverlay(droppedOverlay), "theme.reset");
         })
-            .then(() => enableInstalledTheme(spec.id, mode))
+            .then(() => guard(enableInstalledTheme(spec.id, mode), "management.setEnabled"))
             .then(() => {
                 if (!droppedOverlay) {
                     return undefined;
@@ -831,9 +888,10 @@ function applyThemeId(themeId, mode, themeKey, s) {
                 // theme, then rebuild the workaround on top of it: dropping the
                 // overlay without rebuilding it silently disables system-theme
                 // following.
-                return ensurePainted(spec.id).then(() => (mode === "system-theme"
-                    ? ensureColorSchemeSystem(spec.id)
-                    : undefined));
+                return guard(ensurePainted(spec.id), "theme.update")
+                    .then(() => (mode === "system-theme"
+                        ? guard(ensureColorSchemeSystem(spec.id), "theme.update (overlay)")
+                        : undefined));
             });
     });
 }
@@ -910,30 +968,12 @@ function setCurrentMode(mode) {
         }, onError);
 }
 
-// An OS report only becomes the truth on its second consecutive sighting.
-//
-// Every page reports the scheme it renders, and a page (or a background media
-// query) can lag behind a theme we just painted, or declare a scheme of its own.
-// Acting on the first report that disagrees made two themes ping-pong forever:
-// theme A looks dark → "the OS is dark" → apply the night theme → it looks
-// light → "the OS is light" → apply the day theme → …
-let pending_os_dark = null;
-
-// Some signals mirror our own theme instead of the OS: a theme declares its
-// color_scheme, so pages (and the SW media query) report that value right
-// after we enable it. Two themes that disagree then ping-pong forever — the
-// 2.0.11 report. A human flipping the OS never does it three times in ten
-// seconds, so a breaker turns the loop off instead of fighting it.
-const FLIP_WINDOW_MS = 10000;
-const FLIP_LIMIT = 2;
-const BREAKER_MS = 30000;
+// Ring buffer of the last decisions, shown by the diagnostics panel: without it
+// every "it still does not switch" report needs a guess.
 const EVENTS_KEY = "autodarkevents";
 const EVENTS_MAX = 40;
 let recent_events = [];
 
-// Ring buffer of the last decisions the background made. Without it every
-// "it still switches" report needs a guess: the log says *that* a tick ran,
-// never why the stored scheme moved.
 function pushEvent(kind, detail) {
     recent_events.push({t: new Date().toISOString().slice(11, 19), kind: kind, detail: String(detail)});
     if (recent_events.length > EVENTS_MAX) {
@@ -942,30 +982,21 @@ function pushEvent(kind, detail) {
     try {
         browser.storage.local.set({[EVENTS_KEY]: {check: recent_events}});
     } catch (error) {
-        // never let diagnostics break the tick
+        // never let diagnostics break a tick
     }
 }
 
-let flip_times = [];
-let breaker_until = 0;
-
-function recordFlip() {
-    let now = Date.now();
-    flip_times = flip_times.filter((ms) => now - ms < FLIP_WINDOW_MS);
-    flip_times.push(now);
-    pushEvent("flip", "theme switch #" + flip_times.length + " in " + (FLIP_WINDOW_MS / 1000) + "s");
-    if (flip_times.length > FLIP_LIMIT && breaker_until < now) {
-        breaker_until = now + BREAKER_MS;
-        flip_times = [];
-        logDebug("theme flipped " + (FLIP_LIMIT + 1) + " times in "
-            + (FLIP_WINDOW_MS / 1000) + "s: ignoring OS reports for "
-            + (BREAKER_MS / 1000) + "s (a report that mirrors our own theme?).");
-    }
-}
-
-function osReportsBlocked() {
-    return breaker_until > Date.now();
-}
+// In system-theme mode the OS scheme is *read*, not inferred.
+//
+// Everything that listened for a change — the background media query event, the
+// content scripts, the vote that waited for a second sighting — could miss one:
+// the event page sleeps, our own pages run no content script, Firefox does not
+// always deliver the media query event. Detection looked random because it was
+// a chain of witnesses. Reading the value on a short timer cannot miss: in this
+// mode the theme we keep active always declares color_scheme "system", so the
+// query reports the OS and never our own colours.
+const SCHEME_POLL_MS = 2000;
+let scheme_poll_timer = null;
 
 function recordSystemDark(dark, reason) {
     if (system_dark === dark) {
@@ -974,85 +1005,13 @@ function recordSystemDark(dark, reason) {
     system_dark = dark;
     pushEvent("os", (dark ? "dark" : "light") + " <- " + reason);
     logDebug("System colour scheme is now " + (dark ? "dark" : "light") + " (" + reason + ")");
-    pending_os_dark = null;
     return browser.storage.local.set({ [SYSTEM_DARK_KEY]: { check: dark } })
         .then(() => true, () => true);
 }
 
-// How long an ambiguous report must hold before it is believed.
-//
-// Waiting for a second page to confirm meant "nothing happens" whenever the
-// user had one tab open. Re-reading the report a moment later distinguishes a
-// stable OS value from a transient echo of the theme we just painted.
-const CONFIRM_MS = 600;
-let confirm_timer = null;
-
-// Two sightings of the same value are required before the stored scheme moves.
-//
-// Only used for reports that may be our own theme talking back (see
-// handleSchemeReport): a genuine OS change is accepted on the first sighting,
-// and an ambiguous one is settled by CONFIRM_MS, not by waiting for a second
-// page that may never exist.
-function considerSystemDark(dark, reason) {
-    if (pending_os_dark && pending_os_dark.dark === dark) {
-        return recordSystemDark(dark, reason + ", confirmed");
-    }
-    pending_os_dark = {dark: dark, ms: Date.now()};
-    logDebug("OS report (" + reason + "): " + (dark ? "dark" : "light")
-        + " seen once, re-checking in " + CONFIRM_MS + "ms.");
-    if (confirm_timer === null && typeof setTimeout === "function") {
-        confirm_timer = setTimeout(() => {
-            confirm_timer = null;
-            let pending = pending_os_dark;
-            if (!pending) {
-                return;
-            }
-            recordSystemDark(pending.dark, "held for " + CONFIRM_MS + "ms").then((moved) => {
-                if (!moved) {
-                    return;
-                }
-                getSettings().then((s) => {
-                    if (s.changeMode === "system-theme") {
-                        queueTick("os-change");
-                    }
-                }, onError);
-            });
-        }, CONFIRM_MS);
-    }
-    return Promise.resolve(false);
-}
-
-// The light/dark scheme our own theme declares, when it is knowable.
-//
-// A theme carries `properties.color_scheme`, and Firefox mirrors that value onto
-// pages' prefers-color-scheme. A report equal to this is therefore ambiguous:
-// it may be the OS, or it may be our theme echoing back. A report that
-// contradicts it can only come from the OS.
-function paintedEchoDark() {
-    let id = last_applied.themeId;
-    if (id === "firefox-compact-light@mozilla.org") {
-        return false;
-    }
-    if (id === "firefox-compact-dark@mozilla.org") {
-        return true;
-    }
-    return null;
-}
-
-// Decide what to do with one scheme report.
-//
-// The 2.0.12 fix required two sightings of *every* report. A real OS switch
-// delivers a single report per open page — with one tab open the theme then
-// never moved at all ("it does not toggle any more on a system-wide colour
-// scheme change"). Voting is only needed for the ambiguous case: a value that
-// matches the scheme our own theme declares.
+// One report, one decision: a report that contradicts what we believe is the
+// OS speaking (our own theme cannot: it declares color_scheme "system").
 function handleSchemeReport(dark, reason) {
-    let echo = paintedEchoDark();
-    if (echo !== null && echo === !!dark) {
-        logDebug("OS report (" + reason + ") matches our own theme's declared scheme, "
-            + "asking for a confirmation.");
-        return considerSystemDark(!!dark, reason);
-    }
     return recordSystemDark(!!dark, reason);
 }
 
@@ -1080,14 +1039,42 @@ function syncSystemDarkFromBackground(mode, reason) {
     }
 }
 
+// Keep reading the OS scheme while system-theme mode is selected.
+function startSchemePoll(mode) {
+    if (mode !== "system-theme") {
+        if (scheme_poll_timer !== null) {
+            clearInterval(scheme_poll_timer);
+            scheme_poll_timer = null;
+            logDebug("OS scheme polling stopped.");
+        }
+        return;
+    }
+    if (scheme_poll_timer !== null || typeof setInterval !== "function") {
+        return;
+    }
+    logDebug("OS scheme polling every " + SCHEME_POLL_MS + "ms.");
+    scheme_poll_timer = setInterval(() => {
+        let live = background_scheme_query.matches;
+        if (live === system_dark) {
+            return;
+        }
+        recordSystemDark(live, "poll").then((moved) => {
+            if (moved) {
+                queueTick("os-change");
+            }
+        });
+    }, SCHEME_POLL_MS);
+}
+
 function tick(reason) {
     logDebug("Start tick (" + reason + ")");
 
     return getSettings().then((s) => {
         DEBUG_MODE = s.debugMode;
 
-        // Seed the OS scheme when no page has reported one yet (fresh install,
-        // a browser restarted while no content script was running).
+        // Read the OS scheme directly (and keep reading it while this mode is
+        // on): no witness, no missed event.
+        startSchemePoll(s.changeMode);
         syncSystemDarkFromBackground(s.changeMode, reason);
 
         if (s.startupOnly && STARTUP_BYPASS_REASONS.indexOf(reason) === -1) {
@@ -1180,11 +1167,8 @@ function applyDesired(s, desired, override, reason) {
     let modeChanged = last_applied.mode !== mode;
     let switchedTheme = last_applied.slot !== slot || last_applied.themeId !== themeId;
     last_applied = { slot: slot, themeId: themeId, scheme: contentScheme, mode: mode };
-    if (switchedTheme) {
-        recordFlip();
-    }
 
-    return applyContentScheme(contentScheme)
+    return withTimeout(applyContentScheme(contentScheme), "browserSettings.overrideContentColorScheme")
         .then(() => applyThemeId(themeId, mode, themeKey, s))
         .then(() => setCurrentMode(slotLabel(slot)))
         .then(() => (modeChanged ? browser.storage.local.set({ [LAST_MODE_KEY]: { mode: mode } }) : undefined))
@@ -1192,7 +1176,12 @@ function applyDesired(s, desired, override, reason) {
             updateToolbarTitle(slot);
             syncSystemDarkFromBackground(mode, reason);
         })
-        .catch(onError);
+        .catch((error) => {
+            // Do not remember a theme we failed to apply: the next tick has to
+            // try again instead of believing `unchanged` and doing nothing.
+            last_applied = { slot: null, themeId: null, scheme: null, mode: null };
+            onError(error);
+        });
 }
 
 function queueTick(reason) {
@@ -1528,15 +1517,10 @@ if (browser.runtime && browser.runtime.onMessage) {
             if (message.dark === system_dark) {
                 return;
             }
-            // A page only speaks for the OS while nothing pins its scheme.
-            // With a literal light/dark content override every page reports
+            // A page only speaks for the OS while nothing pins its scheme:
+            // with a literal light/dark content override every page reports
             // that fixed value, and trusting it made two themes ping-pong
-            // forever (2.0.11 report). Only the media query votes then, and
-            // it needs two sightings (see considerSystemDark).
-            if (osReportsBlocked()) {
-                logDebug("content script OS report ignored: too many flips recently.");
-                return Promise.resolve(true);
-            }
+            // forever (the 2.0.11 report).
             if (last_content_scheme && last_content_scheme !== "system") {
                 logDebug("content script OS report ignored: pages are pinned to " + last_content_scheme);
                 return Promise.resolve(true);
