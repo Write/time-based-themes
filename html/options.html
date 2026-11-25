@@ -1,108 +1,235 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
     <meta charset="utf-8">
-    <title>automaticDark Options</title>
+    <title>automaticDark settings</title>
     <link href="../css/options.css" rel="stylesheet" type="text/css">
-
-    <link href="../img/automaticDark-op-tbg-300.png" type="icon/png" rel="icon" />
+    <link href="../img/automaticDark-op-tbg-300.png" type="icon/png" rel="icon">
 </head>
-<body class="night">
-	<header>
-	    <h1>
-	    	<img class="logo day-mode" src="../img/automaticDark-ow-tbg-300.png" alt="automaticDark Logo"  width="32" height="32"> 
-	    	<img class="logo night-mode" src="../img/automaticDark-wp-tbg-300.png" alt="automaticDark Logo"  width="32" height="32"> 
-	    	<img class="logo off-mode" src="../img/automaticDark-w-tbg-300.png" alt="automaticDark Logo"  width="32" height="32"> 
-	        automaticDark Options
-	    </h1>
-	</header>
-    <section id="settings">
-        <h1>Settings</h1>
+<body>
+<header>
+    <h1>
+        <img class="logo day-mode" src="../img/automaticDark-ow-tbg-300.png" alt="" width="32" height="32">
+        <img class="logo night-mode" src="../img/automaticDark-wp-tbg-300.png" alt="" width="32" height="32">
+        <img class="logo system-mode" src="../img/automaticDark-w-tbg-300.png" alt="" width="32" height="32">
+        automaticDark
+    </h1>
+    <p id="status" class="status">…</p>
+</header>
 
-        <p>
-            <input type="radio" id="automatic-suntimes-radio" name="set-suntimes" value="automatic-suntimes">
-            <label for="automatic-suntimes-radio">Automatically set sunrise/sunset times (requires location)</label>
-            <label id="location-permission-warning" style="color: red; display: none;"> - Location permission needs to be granted</label>
+<main>
+    <!-- ---------------------------------------------------------------- -->
+    <section id="section-mode">
+        <h2>When should the theme change?</h2>
+
+        <p class="choice">
+            <input type="radio" id="mode-location" name="change-mode" value="location-suntimes">
+            <label for="mode-location">At sunrise and sunset at my location</label>
         </p>
-        <p>
-            <input type="radio" id="manual-suntimes-radio" name="set-suntimes" value="manual-suntimes">
-            <label for="manual-suntimes-radio">Manually set sunrise/sunset times</label>
+        <div class="sub" id="location-details">
+            <p>
+                <button type="button" id="locate-btn">Use my current location</button>
+                <span id="locate-message" class="message"></span>
+            </p>
+            <p id="location-warning" class="warning hidden">
+                Firefox did not give a location yet. Click “Use my current location”, or enter
+                coordinates below.
+            </p>
+            <p class="coords">
+                <label for="manual-latitude">Latitude</label>
+                <input id="manual-latitude" type="number" step="any" min="-90" max="90" placeholder="48.85">
+                <label for="manual-longitude">Longitude</label>
+                <input id="manual-longitude" type="number" step="any" min="-180" max="180" placeholder="2.35">
+                <label class="inline">
+                    <input type="checkbox" id="use-manual-location">
+                    Always use these coordinates
+                </label>
+            </p>
+            <p id="suntimes-info" class="hint"></p>
+        </div>
 
-            <div style="padding-left: 40px;">
-                <label for="sunrise-time">Sunrise time: </label>
+        <p class="choice">
+            <input type="radio" id="mode-manual" name="change-mode" value="manual-suntimes">
+            <label for="mode-manual">At the times I set</label>
+        </p>
+        <div class="sub" id="times-details">
+            <p>
+                <label for="sunrise-time">Daytime starts</label>
                 <input id="sunrise-time" type="time">
-
-                <label for="sunset-time">Sunset time: </label>
+                <label for="sunset-time">Nighttime starts</label>
                 <input id="sunset-time" type="time">
-            </div>
-        </p>
-        <p>
-            <input type="radio" id="system-theme-radio" name="set-suntimes" value="system-theme">
-            <label for="system-theme-radio">Change themes based on the system theme</label>
-        </p>
-        <p>
-            <input type="checkbox" id="check-startup-only" />
-            <label for="check-startup-only">Do not change themes automatically (change only on start-up and setup)</label>
-            <label id="startup-only-message" style="display: none;"> - Restart for all changes to take effect</label>
-        </p>
-        <p>
-            <label for="daytime-theme-list">Daytime theme: </label>
+            </p>
+            <p class="hint">
+                Times may cross midnight: a nighttime start earlier than the daytime start
+                (e.g. 08:00 → 02:00) means the night theme runs past midnight.
+            </p>
+        </div>
 
-            <select name="daytime-theme" id="daytime-theme-list">
+        <p class="choice">
+            <input type="radio" id="mode-system" name="change-mode" value="system-theme">
+            <label for="mode-system">When my operating system switches between light and dark</label>
+        </p>
+
+        <p class="offsets">
+            <label for="sunrise-offset">Shift sunrise by</label>
+            <input id="sunrise-offset" type="number" step="5" min="-120" max="120" value="0"> min
+            <label for="sunset-offset">Shift sunset by</label>
+            <input id="sunset-offset" type="number" step="5" min="-120" max="120" value="0"> min
+        </p>
+        <p class="hint">A positive shift delays the change; negative advances it.</p>
+
+        <p>
+            <label for="timezone-offset">Time zone</label>
+            <select id="timezone-offset">
+                <option value="auto">Use this computer's time zone</option>
             </select>
         </p>
-        <p>
-            <label for="nighttime-theme-list">Nighttime theme: </label>
+    </section>
 
-            <select name="nighttime-theme" id="nighttime-theme-list">
-            </select>
+    <!-- ---------------------------------------------------------------- -->
+    <section id="section-themes">
+        <h2>Themes</h2>
+
+        <p class="filter">
+            <label for="theme-filter">Find a theme</label>
+            <input id="theme-filter" type="search" placeholder="Filter installed themes…" spellcheck="false">
         </p>
+
         <p>
-            <button id="reset-default-btn">Reset Settings to Default</button>
-            <label id="reset-message" style="display: none;"> - Restart for all changes to take effect</label>
+            <label for="daytime-theme-list">Daytime theme</label>
+            <select id="daytime-theme-list"></select>
+            <button type="button" class="preview" data-target="daytime-theme-list">Preview</button>
         </p>
+
         <p>
-            <small>
-                <input type="checkbox" id="debug-mode" />
-                <label for="debug-mode">Debug mode</label>
-            </small>
+            <label for="nighttime-theme-list">Nighttime theme</label>
+            <select id="nighttime-theme-list"></select>
+            <button type="button" class="preview" data-target="nighttime-theme-list">Preview</button>
         </p>
+
+        <p id="theme-warning" class="warning hidden">
+            The selected theme is no longer installed. Pick another one.
+        </p>
+
+        <h3>Extra times of day</h3>
+        <p class="hint">
+            Optional: give a theme its own window during the day or the night (for example an
+            “evening” theme from 21:00, or a “morning” theme from 06:00).
+        </p>
+        <div id="extra-slots"></div>
+        <p><button type="button" id="add-slot">Add a time slot</button></p>
+
+        <h3>Rotate through several themes <span class="badge">optional</span></h3>
+        <p class="hint">
+            Tick themes below to have automaticDark pick among them, instead of always using the
+            same one. Useful with the day/night switch.
+        </p>
+        <div id="random-pool" class="pool"></div>
+        <p>
+            <label for="random-interval">Pick a new one every</label>
+            <input id="random-interval" type="number" min="0" step="0.5" value="0"> hours
+            <span class="hint">0 = only when the theme switches.</span>
         </p>
     </section>
-    <div class="divider"></div>
-    <section id="about">
-        <h1>About</h1>
+
+    <!-- ---------------------------------------------------------------- -->
+    <section id="section-scheme">
+        <h2>Web page colour scheme</h2>
+        <p class="hint">
+            Tells websites whether to render light or dark (the same setting as
+            “Website appearance” in Firefox's settings).
+        </p>
         <p>
-            automaticDark 1.4.3 by <a class="no-style" href="https://github.com/skhzhang" target="_blank">Simon Zhang</a>
-            <ul>
-                <li><a href="https://addons.mozilla.org/en-US/firefox/addon/automatic-dark/" target="_blank">Firefox Add-ons</a></li>
-                <li><a href="https://github.com/skhzhang/time-based-themes" target="_blank">Github</a></li>
-                <li>
-                    Support - bugs, suggestions, feedback
-                    <ul>
-                        <li>
-                            <a href="https://github.com/skhzhang/time-based-themes/issues/new" target="_blank">Log an issue</a> (requires Github account)
-                        </li>
-                        <li>
-                            <a href="mailto:simonkhzhang+automaticdark@gmail.com" target="_blank">Email me</a>
-                        </li>
-                    </ul>
-                </li>
-                <li>
-                    Thank you:
-                    <ul>
-                        <li><a href="https://github.com/arch292">arch292</a></li>
-                        <li><a href="https://github.com/easonwong-de">Eason Wong</a></li>
-                        <li><a href="https://github.com/mourner/suncalc">SunCalc</a></li>
-                        <li>All <a href="https://github.com/skhzhang/time-based-themes/graphs/contributors" target="_blank">Github project contributors</a></li>
-                    </ul>
-                </li>
-            </ul>
+            <label for="day-scheme">During the day</label>
+            <select id="day-scheme"></select>
+        </p>
+        <p>
+            <label for="night-scheme">During the night</label>
+            <select id="night-scheme"></select>
+        </p>
+        <p class="hint">
+            “Match the theme” follows the theme slot (light by day, dark at night).
+        </p>
+
+        <h3>Per-site overrides <span class="badge">optional</span></h3>
+        <p class="hint">
+            One site per line: <code>example.com dark</code> or <code>example.com light</code>.
+            Sub-domains are included. Lines starting with # are ignored.
+        </p>
+        <textarea id="site-overrides" rows="4" spellcheck="false"
+                  placeholder="news.example.com dark&#10;intranet.example.com light"></textarea>
+    </section>
+
+    <!-- ---------------------------------------------------------------- -->
+    <section id="section-behaviour">
+        <h2>Behaviour</h2>
+        <p>
+            <input type="checkbox" id="check-startup-only">
+            <label for="check-startup-only">Only change the theme at start-up and when I change
+                a setting here</label>
+        </p>
+        <p>
+            <input type="checkbox" id="apply-on-focus">
+            <label for="apply-on-focus">Re-apply the theme whenever Firefox gets focus</label>
+        </p>
+        <p class="hint">
+            Helps when another add-on or a manual change left the wrong theme on screen.
+        </p>
+        <p>
+            <input type="checkbox" id="debug-mode">
+            <label for="debug-mode">Debug logging</label>
+        </p>
+        <p>
+            <button type="button" id="reset-default-btn">Reset to defaults</button>
+            <span id="reset-message" class="message"></span>
         </p>
     </section>
-    <script type="text/javascript" src="../lib/suncalc.js"></script>
-    <script type="text/javascript" src="../js/utils.js"></script>
-    <script type="text/javascript" src="../js/common.js"></script>
-    <script type="text/javascript" src="../js/options.js"></script>
+
+    <!-- ---------------------------------------------------------------- -->
+    <section id="section-custom">
+        <h2>Custom themes <span class="badge">advanced</span></h2>
+        <p class="hint">
+            Paste a theme object as accepted by
+            <code>browser.theme.update()</code> — for example the JSON exported by
+            <a href="https://color.firefox.com" target="_blank" rel="noreferrer">Firefox Color</a>.
+            Select it as daytime/nighttime theme to use it.
+        </p>
+        <p>
+            <label for="custom-day-json">Daytime custom theme</label>
+            <textarea id="custom-day-json" rows="5" spellcheck="false"
+                      placeholder='{"colors": {"frame": "#f9f5d7", "toolbar": "#f9f5d7"}}'></textarea>
+        </p>
+        <p>
+            <label for="custom-night-json">Nighttime custom theme</label>
+            <textarea id="custom-night-json" rows="5" spellcheck="false"
+                      placeholder='{"colors": {"frame": "#1d2021", "toolbar": "#1d2021"}}'></textarea>
+        </p>
+        <p>
+            <button type="button" id="validate-day">Check &amp; preview day</button>
+            <button type="button" id="validate-night">Check &amp; preview night</button>
+            <span id="custom-message" class="message"></span>
+        </p>
+    </section>
+
+    <!-- ---------------------------------------------------------------- -->
+    <section id="section-about">
+        <h2>About</h2>
+        <p>
+            automaticDark 2.0.0 — originally by
+            <a href="https://github.com/skhzhang" target="_blank" rel="noreferrer">Simon Zhang</a>.
+        </p>
+        <ul>
+            <li><a href="https://github.com/skhzhang/time-based-themes" target="_blank" rel="noreferrer">Source code</a></li>
+            <li><a href="https://github.com/skhzhang/time-based-themes/issues" target="_blank" rel="noreferrer">Report a problem</a></li>
+            <li>Sun position by <a href="https://github.com/mourner/suncalc" target="_blank" rel="noreferrer">SunCalc</a></li>
+        </ul>
+    </section>
+</main>
+
+<script src="../lib/suncalc.js"></script>
+<script src="../js/utils.js"></script>
+<script src="../js/schedule.js"></script>
+<script src="../js/common.js"></script>
+<script src="../js/options.js"></script>
 </body>
 </html>

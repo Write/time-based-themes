@@ -1,410 +1,732 @@
-let locationWarning = document.getElementById("location-permission-warning");
-let startupOnlyMessage = document.getElementById("startup-only-message");
-let resetMessage = document.getElementById("reset-message");
+'use strict';
 
-let automaticSuntimesRadio = document.getElementById("automatic-suntimes-radio");
-let manualSuntimesRadio = document.getElementById("manual-suntimes-radio");
-let sysThemeRadio = document.getElementById("system-theme-radio");
+// ---------------------------------------------------------------------------
+// Options page.
+//
+// Everything is written straight to storage and the background page is asked
+// to re-evaluate the schedule, so a change takes effect immediately (issue #39:
+// the old page asked users to restart Firefox).
+// ---------------------------------------------------------------------------
 
-let checkStartupBox = document.getElementById("check-startup-only");
-let sunriseInput = document.getElementById("sunrise-time");
-let sunsetInput = document.getElementById("sunset-time");
+const SCHEME_CHOICES = [
+    ["auto", "Match the theme (light by day, dark at night)"],
+    ["light", "Always light"],
+    ["dark", "Always dark"],
+    ["system", "Follow my operating system"],
+    ["off", "Leave Firefox's setting alone"]
+];
 
-let daytimeThemeList = document.getElementById("daytime-theme-list");
-let nighttimeThemeList = document.getElementById("nighttime-theme-list");
-let geolocationBtn = document.getElementById("geolocation-btn");
-let resetDefaultBtn = document.getElementById("reset-default-btn");
+let installedThemes = [];
+let themeFilter = "";
+let currentSettings = null;
+let saving = false;
 
-let debugModeBox = document.getElementById("debug-mode");
-let sunriseInputEvent = new Event("input");
-let sunsetInputEvent = new Event("input");
+function $(id) {
+    return document.getElementById(id);
+}
 
-let currentlyEnabledTheme;
-
-// Log everything stored.
-browser.storage.local.get(null)
-    .then((results) => {
-        logDebug("Options page - Options page opened. All stored data...");
-        if (DEBUG_MODE) {
-            console.log(results);
-        }
-    }, onError);
-
-// logAllAlarms();
-
-changeLogo();
-changeOptionsPageTheme();
-getChangeMode();
-
-browser.storage.onChanged.addListener((changes, area) => {
-    let changedItems = Object.keys(changes);
-
-    logDebug("Options page - Browser storage changed. Iterate through items changed.");
-
-    for (let item of changedItems) {
-        logDebug("Options page - Checking changed item: " + item + ". Its value is " + changes[item].newValue);
-
-        // If the extension's current mode changes (eg. from daytime to nighttime),
-        // then adjust the change and option page theme accordingly.
-        if (item === CURRENT_MODE_KEY) {
-            
-            changeLogo();
-            changeOptionsPageTheme();
-        }
+function on(element, event, handler) {
+    if (element) {
+        element.addEventListener(event, handler);
     }
-});
+}
 
-// Iterate through each extension to populate the dropdowns.
-browser.management.getAll().then((extensions) => {
-    if (DEBUG_MODE) {
-        logDebug("Options page - All extensions...");
-        console.log(extensions);
+function showMessage(id, text, isError) {
+    let element = $(id);
+    if (!element) {
+        return;
     }
+    element.textContent = text || "";
+    element.className = "message" + (isError ? " error" : "");
+    if (text) {
+        clearTimeout(element._timer);
+        element._timer = setTimeout(() => {
+            element.textContent = "";
+        }, 6000);
+    }
+}
 
-    for (let extension of extensions) {
-        // Add each theme as an option in the dropdowns.
-        if (extension.type === 'theme') {
+function formatMinutesLabel(minutes) {
+    if (typeof minutes !== "number" || isNaN(minutes)) {
+        return "—";
+    }
+    return formatMinutes(((minutes % 1440) + 1440) % 1440);
+}
 
-            if (DEBUG_MODE) {
-                logDebug("Options page - Theme extension...");
-                console.log(extension);
-            }
+function timezoneLabel(minutes) {
+    let sign = minutes < 0 ? "-" : "+";
+    let absolute = Math.abs(minutes);
+    let hours = Math.floor(absolute / 60);
+    let mins = absolute % 60;
+    return "UTC" + sign + hours + (mins ? ":" + addLeadZero(mins) : "");
+}
 
-            let extOption = document.createElement('option');
-            extOption.textContent = extension.name;
-            extOption.value = extension.id;
+// ---------------------------------------------------------------------------
+// Themes
+// ---------------------------------------------------------------------------
 
-            daytimeThemeList.appendChild(extOption);
-            nighttimeThemeList.appendChild(extOption.cloneNode(true));
+function themeDisplayName(theme) {
+    return theme.name || theme.id;
+}
 
-            // Take note of the currently enabled theme.
-            if (extension.enabled === true) {
-                currentlyEnabledTheme = extension;
-                if (DEBUG_MODE) {
-                    logDebug("Options page - currentlyEnabledTheme:");
-                    console.log(currentlyEnabledTheme);
+function loadThemes() {
+    if (!browser.management) {
+        return Promise.resolve([]);
+    }
+    return browser.management.getAll().then((extensions) => {
+        installedThemes = extensions
+            .filter((extension) => extension.type === "theme")
+            .sort((a, b) => {
+                // Built-in themes first, then alphabetical.
+                let aBuiltIn = BUILT_IN_THEME_IDS.indexOf(a.id) !== -1;
+                let bBuiltIn = BUILT_IN_THEME_IDS.indexOf(b.id) !== -1;
+                if (aBuiltIn !== bBuiltIn) {
+                    return aBuiltIn ? -1 : 1;
                 }
-            }
-        }
+                return themeDisplayName(a).localeCompare(themeDisplayName(b));
+            });
+        return installedThemes;
+    }, (error) => {
+        onError(error);
+        return [];
+    });
+}
+
+// Themes matching the filter box (issue #60: the list of installed themes
+// grows fast and there was no way to search it).
+function visibleThemes() {
+    if (!themeFilter) {
+        return installedThemes;
+    }
+    let needle = themeFilter.toLowerCase();
+    return installedThemes.filter((theme) => {
+        return themeDisplayName(theme).toLowerCase().indexOf(needle) !== -1
+            || theme.id.toLowerCase().indexOf(needle) !== -1;
+    });
+}
+
+function fillThemeSelect(select, selectedId, customValue, customLabel) {
+    if (!select) {
+        return;
+    }
+    select.textContent = "";
+
+    let themes = visibleThemes();
+    let ids = installedThemes.map((theme) => theme.id);
+
+    // Never hide the theme that is currently selected.
+    if (selectedId && ids.indexOf(selectedId) !== -1
+        && themes.every((theme) => theme.id !== selectedId)) {
+        themes = installedThemes.filter((theme) => theme.id === selectedId).concat(themes);
+    }
+    let unknown = selectedId && ids.indexOf(selectedId) === -1
+        && selectedId !== customValue;
+
+    if (unknown) {
+        let option = document.createElement("option");
+        option.value = selectedId;
+        option.textContent = selectedId + " (not installed)";
+        select.appendChild(option);
     }
 
-    browser.storage.local.get(DAYTIME_THEME_KEY)
-        .then((theme) => {
-            theme = theme[Object.keys(theme)[0]];
+    themes.forEach((theme) => {
+        let option = document.createElement("option");
+        option.value = theme.id;
+        option.textContent = themeDisplayName(theme)
+            + (BUILT_IN_THEME_IDS.indexOf(theme.id) !== -1 ? " (built-in)" : "");
+        select.appendChild(option);
+    });
 
-            if (!isEmpty(theme)) {
-                // Set the default value of the dropdown.
-                daytimeThemeList.value = theme.themeId;
-            }
+    if (customValue) {
+        let option = document.createElement("option");
+        option.value = customValue;
+        option.textContent = customLabel;
+        select.appendChild(option);
+    }
 
-            if (currentlyEnabledTheme.id === theme.themeId) {
-                logDebug("Options page - Day time theme is the currentlyEnabledTheme.");
-            }
-            else {
-                logDebug("Options page - Day time theme is not the currentlyEnabledTheme.");
-            }
-        }, onError);
-
-    browser.storage.local.get(NIGHTTIME_THEME_KEY)
-        .then((theme) => {
-            theme = theme[Object.keys(theme)[0]];
-
-            if (!isEmpty(theme)) {
-                // Set the default value of the dropdown.
-                nighttimeThemeList.value = theme.themeId;
-            }
-
-            if (currentlyEnabledTheme.id === theme.themeId) {
-                logDebug("Options page - Night time theme is the currentlyEnabledTheme.");
-            }
-            else {
-                logDebug("Options page - Night time theme is not the currentlyEnabledTheme.");
-            }
-        }, onError);
-});
-
-// Change the logo on the options page based on the current mode.
-function changeLogo() {
-    logDebug("Options page - Start changeLogo");
-
-    browser.storage.local.get(CURRENT_MODE_KEY)
-        .then((currentMode) => {
-            currentMode = currentMode[CURRENT_MODE_KEY].mode;
-
-            logDebug("Options page - Changing logo to: " + currentMode);
-
-            if (currentMode === "day-mode") {
-                document.querySelector(".logo.day-mode").style.display = "inline-block";
-                document.querySelector(".logo.night-mode").style.display = "none";
-                document.querySelector(".logo.off-mode").style.display = "none";
-            } else if (currentMode === "night-mode") {
-                document.querySelector(".logo.day-mode").style.display = "none";
-                document.querySelector(".logo.night-mode").style.display = "inline-block";
-                document.querySelector(".logo.off-mode").style.display = "none";
-            } else { // off-mode
-                document.querySelector(".logo.day-mode").style.display = "none";
-                document.querySelector(".logo.night-mode").style.display = "none";
-                document.querySelector(".logo.off-mode").style.display = "inline-block";
-            }
-        }, onError);
+    if (selectedId) {
+        select.value = selectedId;
+    } else if (select.options.length) {
+        select.selectedIndex = 0;
+    }
 }
 
-// Change the logo on the options page based on the current mode.
-function changeOptionsPageTheme() {
-    logDebug("Options page - Start changeOptionsPageTheme");
-    /*
-    browser.storage.local.get(CURRENT_MODE_KEY)
-        .then((currentMode) => {
-            currentMode = currentMode[CURRENT_MODE_KEY].mode;
+function fillAllThemeSelects(s) {
+    fillThemeSelect($("daytime-theme-list"), s.dayThemeId,
+        s.customDayTheme ? CUSTOM_DAY : null, "Custom daytime theme (advanced)");
+    fillThemeSelect($("nighttime-theme-list"), s.nightThemeId,
+        s.customNightTheme ? CUSTOM_NIGHT : null, "Custom nighttime theme (advanced)");
 
-            logDebug("Options page - Changing options page theme to: " + currentMode);
-
-            if (currentMode === "day-mode") {
-                document.getElementsByTagName("body")[0].className = "day";
-            } else if (currentMode === "night-mode") {
-                document.getElementsByTagName("body")[0].className = "night"; 
-            } else { // off-mode
-                document.getElementsByTagName("body")[0].className = "day";
-            }
-        }, onError);
-    */
+    renderExtraSlots(s);
+    renderRandomPool(s);
+    if ($("theme-filter") && $("theme-filter").value.trim() !== themeFilter) {
+        themeFilter = $("theme-filter").value.trim();
+    }
 }
 
-// Set the settings on the page based on what mode is set in storage.
-function getChangeMode() {
-    logDebug("Options page - Start getChangeMode");
+function renderRandomPool(s) {
+    let container = $("random-pool");
+    if (!container) {
+        return;
+    }
+    container.textContent = "";
 
-    return browser.storage.local.get(CHANGE_MODE_KEY)
-        .then((obj) => {
-            if (obj[CHANGE_MODE_KEY].mode === "location-suntimes") {
-                automaticSuntimesRadio.checked = true;
-                manualSuntimesRadio.checked = false;
-                sysThemeRadio.checked = false;
-                sunriseInput.disabled = true;
-                sunsetInput.disabled = true;
-            }
-            else if (obj[CHANGE_MODE_KEY].mode === "manual-suntimes") {
-                automaticSuntimesRadio.checked = false;
-                manualSuntimesRadio.checked = true;
-                sysThemeRadio.checked = false;
-                sunriseInput.disabled = false;
-                sunsetInput.disabled = false;
-            }
-            else if (obj[CHANGE_MODE_KEY].mode === "system-theme") {
-                automaticSuntimesRadio.checked = false;
-                manualSuntimesRadio.checked = false;
-                sysThemeRadio.checked = true;
-                sunriseInput.disabled = true;
-                sunsetInput.disabled = true;
-            }
-        }, onError);
+    if (!installedThemes.length) {
+        container.textContent = "No themes found.";
+        return;
+    }
+
+    installedThemes.forEach((theme) => {
+        let label = document.createElement("label");
+        label.className = "pool-item";
+
+        let checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.value = theme.id;
+        checkbox.checked = s.randomPool.indexOf(theme.id) !== -1;
+        checkbox.addEventListener("change", () => {
+            saveRandomPool();
+        });
+
+        label.appendChild(checkbox);
+        label.appendChild(document.createTextNode(" " + themeDisplayName(theme)));
+        container.appendChild(label);
+    });
 }
 
-browser.storage.local.get(CHECK_TIME_STARTUP_ONLY_KEY)
-    .then((obj) => {
-        checkStartupBox.checked = obj[CHECK_TIME_STARTUP_ONLY_KEY].check;
-    }, onError);
+// ---------------------------------------------------------------------------
+// Extra time slots
+// ---------------------------------------------------------------------------
 
-browser.storage.local.get(DEBUG_MODE_KEY)
-    .then((obj) => {
-        debugModeBox.checked = obj[DEBUG_MODE_KEY].check;
-        DEBUG_MODE = obj[DEBUG_MODE_KEY].check;
-    }, onError);
+function renderExtraSlots(s) {
+    let container = $("extra-slots");
+    if (!container) {
+        return;
+    }
+    container.textContent = "";
 
-browser.storage.local.get([SUNRISE_TIME_KEY, SUNSET_TIME_KEY])
-    .then((obj) => {
-        sunriseInput.value = obj[SUNRISE_TIME_KEY].time;
-        sunsetInput.value = obj[SUNSET_TIME_KEY].time;
-    }, onError);
+    let slots = (s.extras || []).slice().sort((a, b) => {
+        return parseTimeToMinutes(a.time) - parseTimeToMinutes(b.time);
+    });
 
-automaticSuntimesRadio.addEventListener("input", function(event) {
-    if (automaticSuntimesRadio.checked) {
+    if (!slots.length) {
+        let empty = document.createElement("p");
+        empty.className = "hint";
+        empty.textContent = "No extra slots.";
+        container.appendChild(empty);
+        return;
+    }
 
-        // Prompt for and set the user's geolocation in storage.
-        return setGeolocation()
-            .then(() => {
-                    // Calculate sunrise/sunset times based on location.
-                    calculateSuntimes().then((suntimes) => {
-                        changeLogo();
+    slots.forEach((slot) => {
+        let row = document.createElement("div");
+        row.className = "slot";
 
-                        // Make changes to settings based on calculation results.
-                        browser.storage.local.set({[CHANGE_MODE_KEY]: {mode: "location-suntimes"}});
-                        sunriseInput.disabled = true;
-                        sunsetInput.disabled = true;
+        let start = document.createElement("label");
+        start.textContent = "From";
+        row.appendChild(start);
 
-                        sunriseInput.value = convertDateToString(suntimes.nextSunrise);
-                        sunsetInput.value = convertDateToString(suntimes.nextSunset);
-                        sunriseInput.dispatchEvent(sunriseInputEvent);
-                        sunsetInput.dispatchEvent(sunsetInputEvent);
-                    });
-                }, (error) => {
-                    onError(error);
-                    locationWarning.style.display = "inline";
-                    getChangeMode(); // In error, change radio buttons (and settings) back to the way they were, based on storage.
-                    queueThemeSwitch(() => changeThemeBasedOnChangeMode("location-theme"));
+        let timeInput = document.createElement("input");
+        timeInput.type = "time";
+        timeInput.value = slot.time || "21:00";
+        timeInput.addEventListener("change", () => {
+            updateSlot(slot.id, {time: timeInput.value});
+        });
+        row.appendChild(timeInput);
+
+        let themeLabel = document.createElement("label");
+        themeLabel.textContent = "use";
+        row.appendChild(themeLabel);
+
+        let select = document.createElement("select");
+        installedThemes.forEach((theme) => {
+            let option = document.createElement("option");
+            option.value = theme.id;
+            option.textContent = themeDisplayName(theme);
+            select.appendChild(option);
+        });
+        if (slot.themeId && installedThemes.every((t) => t.id !== slot.themeId)) {
+            let option = document.createElement("option");
+            option.value = slot.themeId;
+            option.textContent = slot.themeId + " (not installed)";
+            select.appendChild(option);
+        }
+        select.value = slot.themeId || "";
+        select.addEventListener("change", () => {
+            updateSlot(slot.id, {themeId: select.value});
+        });
+        row.appendChild(select);
+
+        let schemeLabel = document.createElement("label");
+        schemeLabel.textContent = "web pages";
+        row.appendChild(schemeLabel);
+
+        let schemeSelect = document.createElement("select");
+        SCHEME_CHOICES.forEach(([value, text]) => {
+            let option = document.createElement("option");
+            option.value = value;
+            option.textContent = value === "auto" ? "match the theme" : text;
+            schemeSelect.appendChild(option);
+        });
+        schemeSelect.value = slot.scheme || "auto";
+        schemeSelect.addEventListener("change", () => {
+            updateSlot(slot.id, {scheme: schemeSelect.value});
+        });
+        row.appendChild(schemeSelect);
+
+        let remove = document.createElement("button");
+        remove.type = "button";
+        remove.className = "link";
+        remove.textContent = "Remove";
+        remove.addEventListener("click", () => {
+            let remaining = (currentSettings.extras || []).filter((x) => x.id !== slot.id);
+            persist({[EXTRA_SLOTS_KEY]: {slots: remaining}});
+        });
+        row.appendChild(remove);
+
+        container.appendChild(row);
+    });
+}
+
+function updateSlot(id, patch) {
+    let slots = (currentSettings.extras || []).map((slot) => {
+        if (slot.id !== id) {
+            return slot;
+        }
+        let updated = Object.assign({}, slot, patch);
+        return updated;
+    });
+    persist({[EXTRA_SLOTS_KEY]: {slots: slots}});
+}
+
+function addSlot() {
+    let slots = (currentSettings.extras || []).slice();
+    slots.push({
+        id: "slot-" + Date.now(),
+        time: "21:00",
+        themeId: currentSettings.nightThemeId || (installedThemes[0] && installedThemes[0].id) || "",
+        scheme: "auto"
+    });
+    persist({[EXTRA_SLOTS_KEY]: {slots: slots}});
+}
+
+// ---------------------------------------------------------------------------
+// Persisting
+// ---------------------------------------------------------------------------
+
+function persist(values) {
+    saving = true;
+    return setStorage(values)
+        .then(() => getSettings())
+        .then((s) => {
+            currentSettings = s;
+            updateSuntimesInfo(s);
+            updateStatus(s);
+            return browser.runtime.sendMessage({type: "autodark-tick", reason: "settings"});
+        })
+        .catch(onError)
+        .then(() => {
+            saving = false;
+        });
+}
+
+function saveRandomPool() {
+    let container = $("random-pool");
+    if (!container) {
+        return;
+    }
+    let ids = Array.prototype.slice.call(container.querySelectorAll("input:checked"))
+        .map((input) => input.value);
+    persist({[RANDOM_POOL_KEY]: {ids: ids}});
+}
+
+// ---------------------------------------------------------------------------
+// Status line
+// ---------------------------------------------------------------------------
+
+function describeNextChange(s) {
+    if (s.changeMode === "system-theme") {
+        return "The theme follows your operating system's light/dark setting.";
+    }
+
+    let timesPromise = s.changeMode === "location-suntimes"
+        ? calculateSuntimes(s)
+        : Promise.resolve(manualSuntimes(s));
+
+    return timesPromise.then((raw) => {
+        let times = s.changeMode === "location-suntimes" ? applyOffsets(raw, s) : raw;
+        let config = buildSlotConfig(s, times);
+        let now = Date.now();
+        let slot = computeSlot(config, now).slot;
+        let label = slot === SLOT_DAY ? "daytime theme" : "nighttime theme";
+
+        if (s.startupOnly) {
+            return "Showing the " + label + ". Automatic switching is off (start-up only).";
+        }
+
+        // Minute-by-minute scan for the next boundary; a day is at most 1440
+        // iterations and this only runs when the page is open.
+        for (let minute = 1; minute <= 1440; minute++) {
+            let when = now + minute * 60000;
+            let next = computeSlot(config, when).slot;
+            if (next !== slot) {
+                let at = new Date(when);
+                let hhmm = addLeadZero(at.getHours()) + ":" + addLeadZero(at.getMinutes());
+                return "Showing the " + label + ". Next change at " + hhmm + ".";
+            }
+        }
+        return "Showing the " + label + ".";
+    }, () => "Showing the " + (computeSlot(buildSlotConfig(s, manualSuntimes(s)), Date.now()).slot));
+}
+
+function updateStatus(s) {
+    let element = $("status");
+    if (!element) {
+        return;
+    }
+    let promise = describeNextChange(s);
+    Promise.resolve(promise).then((text) => {
+        element.textContent = text;
+    }, () => {
+        element.textContent = "";
+    });
+}
+
+function updateSuntimesInfo(s) {
+    let element = $("suntimes-info");
+    if (!element) {
+        return;
+    }
+    if (s.changeMode !== "location-suntimes") {
+        element.textContent = "";
+        return;
+    }
+    if (!locationFor(s)) {
+        element.textContent = "";
+        showLocationWarning(true);
+        return;
+    }
+    showLocationWarning(false);
+    calculateSuntimes(s).then((times) => {
+        if (times.sunriseMin === null || times.sunsetMin === null) {
+            element.textContent = times.polarDay === null
+                ? "Sunrise and sunset cannot be computed for these coordinates."
+                : (times.polarDay
+                    ? "The sun does not set today at this location."
+                    : "The sun does not rise today at this location.");
+            return;
+        }
+        element.textContent = "Today: sunrise "
+            + formatMinutesLabel(times.sunriseMin + (s.sunriseOffset || 0))
+            + ", sunset "
+            + formatMinutesLabel(times.sunsetMin + (s.sunsetOffset || 0))
+            + ".";
+    }, (error) => {
+        onError(error);
+    });
+}
+
+function showLocationWarning(show) {
+    let warning = $("location-warning");
+    if (!warning) {
+        return;
+    }
+    let useRadio = $("mode-location");
+    let visible = show && useRadio && useRadio.checked;
+    warning.className = "warning" + (visible ? "" : " hidden");
+}
+
+// ---------------------------------------------------------------------------
+// Filling the form
+// ---------------------------------------------------------------------------
+
+function fillForm(s) {
+    currentSettings = s;
+
+    $("mode-location").checked = s.changeMode === "location-suntimes";
+    $("mode-manual").checked = s.changeMode === "manual-suntimes";
+    $("mode-system").checked = s.changeMode === "system-theme";
+
+    $("sunrise-time").value = s.sunriseTime;
+    $("sunset-time").value = s.sunsetTime;
+    $("sunrise-offset").value = s.sunriseOffset || 0;
+    $("sunset-offset").value = s.sunsetOffset || 0;
+
+    $("manual-latitude").value = typeof s.manualLatitude === "number" ? s.manualLatitude : "";
+    $("manual-longitude").value = typeof s.manualLongitude === "number" ? s.manualLongitude : "";
+    $("use-manual-location").checked = !!s.useManualLocation;
+
+    fillTimezoneSelect(s);
+    fillAllThemeSelects(s);
+
+    $("random-interval").value = s.randomInterval || 0;
+    $("day-scheme").value = s.dayScheme;
+    $("night-scheme").value = s.nightScheme;
+    $("site-overrides").value = s.siteOverrides || "";
+
+    $("check-startup-only").checked = !!s.startupOnly;
+    $("apply-on-focus").checked = !!s.applyOnFocus;
+    $("debug-mode").checked = !!s.debugMode;
+
+    $("custom-day-json").value = s.customDayTheme ? JSON.stringify(s.customDayTheme, null, 2) : "";
+    $("custom-night-json").value = s.customNightTheme ? JSON.stringify(s.customNightTheme, null, 2) : "";
+
+    document.body.className = "mode-" + s.changeMode;
+    showLocationWarning(!locationFor(s));
+    updateSuntimesInfo(s);
+    updateStatus(s);
+}
+
+function fillTimezoneSelect(s) {
+    let select = $("timezone-offset");
+    if (!select) {
+        return;
+    }
+    if (!select.options.length) {
+        let auto = document.createElement("option");
+        auto.value = "auto";
+        auto.textContent = "Use this computer's time zone";
+        select.appendChild(auto);
+
+        for (let minutes = -12 * 60; minutes <= 14 * 60; minutes += 30) {
+            let option = document.createElement("option");
+            option.value = String(minutes);
+            option.textContent = timezoneLabel(minutes);
+            select.appendChild(option);
+        }
+    }
+    select.value = typeof s.timezoneOffset === "number" ? String(s.timezoneOffset) : "auto";
+}
+
+function fillSchemeSelects() {
+    [["day-scheme"], ["night-scheme"]].forEach(([id]) => {
+        let select = $(id);
+        if (!select) {
+            return;
+        }
+        select.textContent = "";
+        SCHEME_CHOICES.forEach(([value, text]) => {
+            let option = document.createElement("option");
+            option.value = value;
+            option.textContent = text;
+            select.appendChild(option);
+        });
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Wiring
+// ---------------------------------------------------------------------------
+
+function wireModeRadios() {
+    ["mode-location", "mode-manual", "mode-system"].forEach((id) => {
+        on($(id), "change", (event) => {
+            if (!event.target.checked) {
+                return;
+            }
+            persist({[CHANGE_MODE_KEY]: {mode: event.target.value}});
+        });
+    });
+}
+
+function wireTimes() {
+    on($("sunrise-time"), "change", (event) => {
+        persist({[SUNRISE_TIME_KEY]: {time: event.target.value}});
+    });
+    on($("sunset-time"), "change", (event) => {
+        persist({[SUNSET_TIME_KEY]: {time: event.target.value}});
+    });
+    on($("sunrise-offset"), "change", (event) => {
+        persist({[SUNRISE_OFFSET_KEY]: {minutes: Number(event.target.value) || 0}});
+    });
+    on($("sunset-offset"), "change", (event) => {
+        persist({[SUNSET_OFFSET_KEY]: {minutes: Number(event.target.value) || 0}});
+    });
+    on($("timezone-offset"), "change", (event) => {
+        let value = event.target.value;
+        persist({[TIMEZONE_OFFSET_KEY]: {minutes: value === "auto" ? null : Number(value)}});
+    });
+}
+
+function wireLocation() {
+    on($("locate-btn"), "click", () => {
+        showMessage("locate-message", "Asking Firefox for your location…");
+        setGeolocation().then(() => {
+            showMessage("locate-message", "Location saved.");
+            return getSettings().then(fillForm);
+        }).catch((error) => {
+            showMessage("locate-message", String(error), true);
+        });
+    });
+
+    on($("manual-latitude"), "change", saveManualCoordinates);
+    on($("manual-longitude"), "change", saveManualCoordinates);
+    on($("use-manual-location"), "change", (event) => {
+        persist({[USE_MANUAL_LOCATION_KEY]: {check: event.target.checked}});
+    });
+}
+
+function saveManualCoordinates() {
+    let latitude = Number($("manual-latitude").value);
+    let longitude = Number($("manual-longitude").value);
+
+    if ($("manual-latitude").value === "" || $("manual-longitude").value === "") {
+        persist({
+            [MANUAL_LATITUDE_KEY]: {value: null},
+            [MANUAL_LONGITUDE_KEY]: {value: null}
+        });
+        return;
+    }
+    if (isNaN(latitude) || isNaN(longitude)
+        || latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) {
+        showMessage("locate-message", "Latitude must be -90…90 and longitude -180…180.", true);
+        return;
+    }
+    persist({
+        [MANUAL_LATITUDE_KEY]: {value: latitude},
+        [MANUAL_LONGITUDE_KEY]: {value: longitude}
+    });
+}
+
+function wireThemes() {
+    on($("daytime-theme-list"), "change", (event) => {
+        persist({[DAYTIME_THEME_KEY]: {themeId: event.target.value}});
+    });
+    on($("nighttime-theme-list"), "change", (event) => {
+        persist({[NIGHTTIME_THEME_KEY]: {themeId: event.target.value}});
+    });
+
+    Array.prototype.forEach.call(document.querySelectorAll("button.preview"), (button) => {
+        button.addEventListener("click", () => {
+            let select = $(button.getAttribute("data-target"));
+            if (!select) {
+                return;
+            }
+            browser.runtime.sendMessage({type: "autodark-preview", themeId: select.value})
+                .then(() => showMessage("locate-message", ""))
+                .catch(onError);
+        });
+    });
+
+    on($("theme-filter"), "input", (event) => {
+        themeFilter = event.target.value.trim();
+        if (currentSettings) {
+            fillAllThemeSelects(currentSettings);
+        }
+    });
+    on($("add-slot"), "click", addSlot);
+    on($("random-interval"), "change", (event) => {
+        let hours = Number(event.target.value);
+        persist({[RANDOM_INTERVAL_KEY]: {hours: isNaN(hours) || hours < 0 ? 0 : hours}});
+    });
+}
+
+function wireScheme() {
+    on($("day-scheme"), "change", (event) => {
+        persist({[DAY_SCHEME_KEY]: {value: event.target.value}});
+    });
+    on($("night-scheme"), "change", (event) => {
+        persist({[NIGHT_SCHEME_KEY]: {value: event.target.value}});
+    });
+    on($("site-overrides"), "change", (event) => {
+        persist({[SITE_OVERRIDES_KEY]: {text: event.target.value}});
+    });
+}
+
+function wireBehaviour() {
+    on($("check-startup-only"), "change", (event) => {
+        persist({[CHECK_TIME_STARTUP_ONLY_KEY]: {check: event.target.checked}});
+    });
+    on($("apply-on-focus"), "change", (event) => {
+        persist({[APPLY_ON_FOCUS_KEY]: {check: event.target.checked}});
+    });
+    on($("debug-mode"), "change", (event) => {
+        persist({[DEBUG_MODE_KEY]: {check: event.target.checked}});
+    });
+    on($("reset-default-btn"), "click", () => {
+        browser.storage.local.clear().then(() => {
+            return getSettings();
+        }).then((s) => {
+            // Re-apply the defaults immediately rather than asking for a
+            // restart (issue #39).
+            return browser.runtime.sendMessage({type: "autodark-tick", reason: "settings"})
+                .catch(() => {})
+                .then(() => loadThemes())
+                .then(() => fillForm(s));
+        }).then(() => {
+            showMessage("reset-message", "Defaults restored.");
+        }).catch(onError);
+    });
+}
+
+function parseCustomTheme(text) {
+    if (!text || !text.trim()) {
+        return null;
+    }
+    let parsed = JSON.parse(text);
+    if (!parsed || typeof parsed !== "object") {
+        throw new Error("The theme must be a JSON object.");
+    }
+    if (parsed.theme && typeof parsed.theme === "object") {
+        parsed = parsed.theme;
+    }
+    if (!parsed.colors && !parsed.images) {
+        throw new Error("A theme needs at least a \"colors\" or an \"images\" member.");
+    }
+    return parsed;
+}
+
+function wireCustomThemes() {
+    [["validate-day", "custom-day-json", CUSTOM_DAY_THEME_KEY, "Daytime"],
+     ["validate-night", "custom-night-json", CUSTOM_NIGHT_THEME_KEY, "Nighttime"]]
+        .forEach(([buttonId, textareaId, storageKey, label]) => {
+            on($(buttonId), "click", () => {
+                let theme;
+                try {
+                    theme = parseCustomTheme($(textareaId).value);
+                } catch (error) {
+                    showMessage("custom-message", label + ": " + error.message, true);
+                    return;
+                }
+                persist({[storageKey]: {json: theme}}).then(() => {
+                    showMessage("custom-message", label + " theme saved.");
+                    if (theme) {
+                        return browser.runtime.sendMessage({
+                            type: "autodark-preview",
+                            themeId: storageKey === CUSTOM_DAY_THEME_KEY ? CUSTOM_DAY : CUSTOM_NIGHT
+                        }).catch(() => {});
+                    }
                 });
-    }
-});
-
-manualSuntimesRadio.addEventListener("input", function(event) {
-    if (manualSuntimesRadio.checked) {
-        browser.storage.local.set({[CHANGE_MODE_KEY]: {mode: "manual-suntimes"}});
-        sunriseInput.disabled = false;
-        sunsetInput.disabled = false;
-        queueThemeSwitch(() => changeThemeBasedOnChangeMode("manual-suntimes")).then(changeLogo);
-    }
-});
-
-sysThemeRadio.addEventListener("input", function(event) {
-    if (sysThemeRadio.checked) {
-        // browser.browserSettings.overrideContentColorScheme changes the following
-        // about:config to "2", effectively applying a light/dark theme based on the device theme
-        // and allowing the prefers-color-scheme media query to be used to detect the device theme.
-        // The about:config setting is: layout.css.prefers-color-scheme.content-override
-        browser.browserSettings.overrideContentColorScheme.set({value: "system"});
-
-        browser.storage.local.set({[CHANGE_MODE_KEY]: {mode: "system-theme"}});
-        sunriseInput.disabled = true;
-        sunsetInput.disabled = true;
-        queueThemeSwitch(() => changeThemeBasedOnChangeMode("system-theme")).then(changeLogo);
-    }
-});
-
-// Save the startup-only flag and stop or resume scheduled theme
-// switching to match.
-checkStartupBox.addEventListener("input", function(event) {
-    if (checkStartupBox.checked) {
-        browser.storage.local.set({[CHECK_TIME_STARTUP_ONLY_KEY]: {check: true}});
-        Promise.all([
-                browser.alarms.clear(NEXT_SUNRISE_ALARM_NAME),
-                browser.alarms.clear(NEXT_SUNSET_ALARM_NAME)
-            ])
-            .then(() => {
-                logAllAlarms();
-            }, onError);
-        startupOnlyMessage.style.display = "inline";
-    }
-    else {
-        browser.storage.local.set({[CHECK_TIME_STARTUP_ONLY_KEY]: {check: false}});
-        createAlarm(SUNRISE_TIME_KEY, NEXT_SUNRISE_ALARM_NAME, 60 * 24);
-        createAlarm(SUNSET_TIME_KEY, NEXT_SUNSET_ALARM_NAME, 60 * 24);
-        // If the background page started with this flag on, it skipped
-        // registering its scheme-change listeners, and this page cannot
-        // register them for it. Its alarm listener IS registered, so the
-        // poll alarm restores theme switching without a restart.
-        browser.alarms.create(SYSTEM_THEME_POLL_ALARM_NAME, {periodInMinutes: 1});
-        // Switch right away in case the correct theme changed while
-        // switching was off.
-        browser.storage.local.get(CHANGE_MODE_KEY)
-            .then((obj) => {
-                queueThemeSwitch(() => changeThemeBasedOnChangeMode(obj[CHANGE_MODE_KEY].mode));
-            }, onError);
-        startupOnlyMessage.style.display = "none";
-    }
-});
-
-// Enable/disable the check on debug mode flag.
-debugModeBox.addEventListener("input", function(event) {
-    DEBUG_MODE = debugModeBox.checked;
-    browser.storage.local.set({[DEBUG_MODE_KEY]: {check: debugModeBox.checked}})
-        .then(() => {
-            logDebug("Options page - DEBUG_MODE has been set to: " + DEBUG_MODE);
-        }, onError);
-});
-
-// If the sunrise time input is changed,
-// change the sunrise time and check if the current theme should be changed.
-// Also create an alarm if the 'check startup only' flag is disabled.
-sunriseInput.addEventListener("input", function(event) {
-    browser.storage.local.set({[SUNRISE_TIME_KEY]: {time: sunriseInput.value}})
-        .then(() => {
-            queueThemeSwitch(checkTime).then(changeLogo);
-            return browser.storage.local.get(CHECK_TIME_STARTUP_ONLY_KEY)
-        }, onError)
-        .then((obj) => {
-            if (!obj[CHECK_TIME_STARTUP_ONLY_KEY].check) {
-                return createAlarm(SUNRISE_TIME_KEY, NEXT_SUNRISE_ALARM_NAME, 60 * 24);
-            }
+            });
         });
-});
+}
 
-// If the sunset time input is changed,
-// change the sunset time and check if the current theme should be changed.
-sunsetInput.addEventListener("input", function(event) {
-    browser.storage.local.set({[SUNSET_TIME_KEY]: {time: sunsetInput.value}})
-        .then(() => {
-            queueThemeSwitch(checkTime).then(changeLogo);
-            return browser.storage.local.get(CHECK_TIME_STARTUP_ONLY_KEY);
-        }, onError)
-        .then((obj) => {
-            if (!obj[CHECK_TIME_STARTUP_ONLY_KEY].check) {
-                return createAlarm(SUNSET_TIME_KEY, NEXT_SUNSET_ALARM_NAME, 60 * 24);
-            }
-        });
-});
+// ---------------------------------------------------------------------------
+// Start-up
+// ---------------------------------------------------------------------------
 
-// If the dropdown for daytime themes is changed,
-// set the daytime theme and check if the current theme should be changed.
-daytimeThemeList.addEventListener('change', function(event) {
-    browser.storage.local.set({[DAYTIME_THEME_KEY]: {themeId: this.value}})
-        .then(() => {
-            return browser.storage.local.get([CHECK_TIME_STARTUP_ONLY_KEY, CHANGE_MODE_KEY]);
-        }, onError)
-        .then((obj) => {
-            queueThemeSwitch(() => changeThemeBasedOnChangeMode(obj[CHANGE_MODE_KEY].mode));
-        }, onError);
-    }
-);
+function start() {
+    fillSchemeSelects();
+    wireModeRadios();
+    wireTimes();
+    wireLocation();
+    wireThemes();
+    wireScheme();
+    wireBehaviour();
+    wireCustomThemes();
 
-// If the dropdown for nighttime themes is changed,
-// set the nighttime theme and check if the current theme should be changed.
-nighttimeThemeList.addEventListener('change', function(event) {
-    browser.storage.local.set({[NIGHTTIME_THEME_KEY]: {themeId: this.value}})
-        .then(() => {
-            return browser.storage.local.get([CHECK_TIME_STARTUP_ONLY_KEY, CHANGE_MODE_KEY]);
-        }, onError)
-        .then((obj) => {
-            queueThemeSwitch(() => changeThemeBasedOnChangeMode(obj[CHANGE_MODE_KEY].mode));
-        }, onError);
-    }
-);
+    loadThemes()
+        .then(() => getSettings())
+        .then((s) => {
+            fillForm(s);
+        })
+        .catch(onError);
 
-// Reset all settings to their default.
-// Note that the "default" themes may change
-// depending on the user's current theme and their 
-// installed themes.
-resetDefaultBtn.addEventListener("click", 
-    function(event) {
-        if (window.confirm("Are you sure you want to reset to default settings?")) {
-            Promise.all([
-                    browser.storage.local.clear(),
-                    browser.alarms.clearAll()
-                ])
-                .then(() => {
-                    automaticSuntimesRadio.checked = false;
-                    manualSuntimesRadio.checked = true;
-                    sysThemeRadio.checked = false;
-                    sunriseInput.disabled = false;
-                    sunsetInput.disabled = false;
-
-                    checkStartupBox.checked = DEFAULT_CHECK_TIME_STARTUP_ONLY;
-                    debugModeBox.checked = DEFAULT_DEBUG_MODE;
-                    sunriseInput.value = DEFAULT_SUNRISE_TIME;
-                    sunsetInput.value = DEFAULT_SUNSET_TIME;
-
-                    return setDefaultThemes();
-
-                }, onError)
-                .then(() => {
-                    daytimeThemeList.value = DEFAULT_DAYTIME_THEME;
-                    nighttimeThemeList.value = DEFAULT_NIGHTTIME_THEME;
-                    resetMessage.style.display = "inline";
-
-                    return init();
-                }, onError)
-                .then(changeLogo);
+    // Keep the status line fresh while the page is open.
+    setInterval(() => {
+        if (currentSettings && !saving) {
+            updateStatus(currentSettings);
         }
-    }
-);
+    }, 30000);
+}
 
-
+start();

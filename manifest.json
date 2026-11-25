@@ -1,34 +1,72 @@
 {
-  "browser_specific_settings": {
-    "gecko": {
-      "id": "{9ed7d361-ccd9-4cad-9846-977da2651fb5}"
-    }
-  },
-
   "manifest_version": 2,
   "name": "automaticDark - Time-Based Theme Changer",
-  "version": "1.4.3",
+  "version": "2.0.0",
+  "description": "Automatically switch Firefox's theme at sunrise and sunset, at times you choose, or with your operating system's light/dark mode.",
   "homepage_url": "https://github.com/skhzhang/time-based-themes/",
-  "description": "Automatically change Firefox's theme based on the time",
-
-  "icons": {
-    "300": "img/automaticDark-op-tbg-300.png"
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "{eae8508f-68a5-4a0b-80fb-35c1675184dc}",
+      "strict_min_version": "140.0",
+      "data_collection_permissions": {
+        "required": [
+          "none"
+        ]
+      }
+    },
+    "gecko_android": {
+      "strict_min_version": "142.0"
+    }
   },
-
+  "icons": {
+    "16": "img/icon-16.png",
+    "32": "img/icon-32.png",
+    "48": "img/icon-48.png",
+    "96": "img/icon-96.png"
+  },
   "permissions": [
     "alarms",
     "browserSettings",
+    "idle",
     "management",
     "storage",
-    "theme"
+    "theme",
+    "http://*/*",
+    "https://*/*"
   ],
-
   "background": {
-    "scripts": ["js/utils.js", "js/common.js", "js/background.js", "lib/suncalc.js"]
+    "scripts": [
+      "js/utils.js",
+      "js/schedule.js",
+      "lib/suncalc.js",
+      "js/common.js",
+      "js/background.js"
+    ]
   },
-
+  "content_scripts": [
+    {
+      "matches": [
+        "http://*/*",
+        "https://*/*"
+      ],
+      "js": [
+        "js/content.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": false
+    }
+  ],
+  "browser_action": {
+    "default_title": "automaticDark: click to switch between the day and night theme",
+    "default_icon": {
+      "16": "img/icon-16.png",
+      "32": "img/icon-32.png",
+      "48": "img/icon-48.png",
+      "96": "img/icon-96.png"
+    }
+  },
   "options_ui": {
-      "page": "html/options.html",
-      "open_in_tab": true
+    "page": "html/options.html",
+    "open_in_tab": true
   }
 }
