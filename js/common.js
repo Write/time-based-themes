@@ -457,7 +457,7 @@ function substituteBuiltInTheme(themeId, themeKey, s) {
 
 // "auto" means: mirror the slot the theme is for (dark at night, light by
 // day) in time-based modes, and follow the OS in system-theme mode.
-function resolveContentScheme(scheme, slot, mode) {
+function resolveContentScheme(scheme, slot, mode, themeId) {
     if (scheme === "off") {
         return null;
     }
@@ -473,6 +473,15 @@ function resolveContentScheme(scheme, slot, mode) {
     }
     if (scheme === "light" || scheme === "dark") {
         return scheme;
+    }
+    // "auto" mirrors the theme actually picked for this slot when it is one of
+    // the built-in ones: choosing Light for the night slot used to paint light
+    // chrome over pages still forced to dark.
+    if (themeId === "firefox-compact-light@mozilla.org") {
+        return "light";
+    }
+    if (themeId === "firefox-compact-dark@mozilla.org") {
+        return "dark";
     }
     return slot === SLOT_DAY ? "light" : "dark";
 }
@@ -822,7 +831,7 @@ function applyDesired(s, desired, override, reason) {
         }
     }
 
-    let contentScheme = resolveContentScheme(schemeSetting, slot, mode);
+    let contentScheme = resolveContentScheme(schemeSetting, slot, mode, themeId);
     let themeKey = slot === SLOT_DAY ? DAYTIME_THEME_KEY : NIGHTTIME_THEME_KEY;
 
     let unchanged = last_applied.slot === slot

@@ -623,3 +623,49 @@ test("geolocation updates both stored coordinates", () => {
     assert.match(body, /\}, true\)\.then\(\(\) => resolve\(position\.coords\)/,
         "a second location lookup must overwrite the first one");
 });
+
+test("a built-in light theme is honoured at night", async () => {
+    const {sandbox, storage, calls} = run();
+    const noonMs = Date.now() - (Date.now() % 86400000);
+    const LIGHT = "firefox-compact-light@mozilla.org";
+
+    await storage.api.set({
+        "autodarkchangeMode": {mode: "manual-suntimes"},
+        "autodarkdaytimeTheme": {themeId: "my-day@x"},
+        "autodarknighttimeTheme": {themeId: LIGHT},
+        "autodarksunriseTime": {time: "08:00"},
+        "autodarksunsetTime": {time: "20:00"}
+    });
+
+    vm.runInContext("__fixedNow = " + (noonMs + 12 * 3600000) + "; Date.now = () => __fixedNow;", sandbox);
+    await vm.runInContext("init().then(() => switch_queue)", sandbox);
+
+    vm.runInContext("__fixedNow = " + (noonMs + 23 * 3600000) + ";", sandbox);
+    await vm.runInContext("queueTick('alarm')", sandbox);
+
+    const last = calls.setEnabled[calls.setEnabled.length - 1];
+    assert.deepStrictEqual(last, [LIGHT, true],
+        "picking the built-in light theme for the night slot must enable it");
+    assert.deepStrictEqual(calls.overrides.slice(-1), ["light"],
+        "the night slot must pin the content scheme to light");
+});
+
+test("a built-in dark theme pins the content scheme to dark by day", async () => {
+    const {sandbox, storage, calls} = run();
+    const noonMs = Date.now() - (Date.now() % 86400000);
+    const DARK = "firefox-compact-dark@mozilla.org";
+
+    await storage.api.set({
+        "autodarkchangeMode": {mode: "manual-suntimes"},
+        "autodarkdaytimeTheme": {themeId: DARK},
+        "autodarknighttimeTheme": {themeId: DARK},
+        "autodarksunriseTime": {time: "08:00"},
+        "autodarksunsetTime": {time: "20:00"}
+    });
+
+    vm.runInContext("__fixedNow = " + (noonMs + 12 * 3600000) + "; Date.now = () => __fixedNow;", sandbox);
+    await vm.runInContext("init().then(() => switch_queue)", sandbox);
+
+    assert.deepStrictEqual(calls.overrides.slice(-1), ["dark"],
+        "dark chrome must not sit over light pages");
+});
