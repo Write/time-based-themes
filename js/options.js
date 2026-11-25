@@ -964,7 +964,8 @@ function reportOptionsScheme() {
     try {
         let done = browser.runtime.sendMessage({
             type: "autodark-scheme",
-            dark: optionsSchemeQuery.matches
+            dark: optionsSchemeQuery.matches,
+            source: "options"
         });
         if (done && typeof done.catch === "function") {
             done.catch(() => {});

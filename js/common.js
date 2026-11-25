@@ -1730,6 +1730,15 @@ if (browser.runtime && browser.runtime.onMessage) {
                 logDebug("content script OS report ignored: pages are pinned to " + last_content_scheme);
                 return Promise.resolve(true);
             }
+            // Our own settings page is a privileged document: its query follows
+            // the *browser theme* (Firefox bug 1741009), so while the enabled
+            // theme declares a literal scheme it can only repeat that scheme —
+            // it was feeding "dark" back in as if it were the OS.
+            if (message.source === "options" && current_pins_scheme) {
+                logDebug("options-page OS report ignored: enabled theme pins "
+                    + current_declared_scheme);
+                return Promise.resolve(true);
+            }
             return handleSchemeReport(message.dark, "content script").then(() => {
                 getSettings().then((s) => {
                     if (s.changeMode === "system-theme") {
