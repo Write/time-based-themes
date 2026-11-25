@@ -14,6 +14,80 @@ function logDebug(text) {
 // Helper: Print the error.
 function onError(error) {
     console.log("automaticDark Error: " + error);
+    debugLog("error", String(error && error.message ? error.message : error));
+}
+
+// ---------------------------------------------------------------------------
+// Debug trace
+// ---------------------------------------------------------------------------
+//
+// The background page is where every decision is taken, and it is also the one
+// place a user cannot easily open a console for (it stops as soon as it is
+// idle). So the decisions are kept in a ring buffer, in storage, and the
+// settings page pastes them into the diagnostics block:
+// "when my operating system switches it really does not work" is not
+// debuggable from the host side otherwise.
+
+const DEBUG_LOG_KEY = "autodarkdebug";
+const DEBUG_LOG_MAX = 400;
+
+let debug_trace = null;
+
+function debugLogNow() {
+    let stamp = new Date();
+    return stamp.toISOString().slice(11, 23);
+}
+
+function debugLog(tag, detail) {
+    if (debug_trace === null) {
+        debug_trace = [];
+    }
+    debug_trace.push(debugLogNow() + " " + tag.padEnd(9, " ") + " " + detail);
+    if (debug_trace.length > DEBUG_LOG_MAX) {
+        debug_trace = debug_trace.slice(-DEBUG_LOG_MAX);
+    }
+    logDebug(tag + ": " + detail);
+    if (typeof browser !== "undefined" && browser.storage && browser.storage.local) {
+        try {
+            let call = browser.storage.local.set({[DEBUG_LOG_KEY]: {check: debug_trace}});
+            if (call && typeof call.catch === "function") {
+                call.catch(() => {});
+            }
+        } catch (error) {
+            // never let tracing break a tick
+        }
+    }
+    return detail;
+}
+
+// Load what the previous run left behind, so a restart does not erase the trace
+// that explains it.
+function debugLoad() {
+    if (typeof browser === "undefined" || !browser.storage) {
+        return Promise.resolve();
+    }
+    return browser.storage.local.get(DEBUG_LOG_KEY).then((obj) => {
+        let stored = obj && obj[DEBUG_LOG_KEY] && obj[DEBUG_LOG_KEY].check;
+        if (Array.isArray(stored) && debug_trace === null) {
+            debug_trace = stored;
+        }
+    }, () => {});
+}
+
+function debugClear() {
+    debug_trace = [];
+    if (typeof browser !== "undefined" && browser.storage) {
+        return browser.storage.local.set({[DEBUG_LOG_KEY]: {check: []}}).catch(() => {});
+    }
+    return Promise.resolve();
+}
+
+function debugSnapshot() {
+    return (debug_trace || []).slice();
+}
+
+function debugText() {
+    return debugSnapshot().join("\n");
 }
 
 // ---------------------------------------------------------------------------

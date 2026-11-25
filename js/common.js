@@ -769,6 +769,10 @@ function ensurePainted(themeId) {
     }
     return browser.theme.getCurrent()
         .then((current) => {
+            debugLog("painted", (current && current.colors ? "colours" : "nothing")
+                + " name=" + JSON.stringify(current && current.name)
+                + " scheme=" + JSON.stringify(current && current.properties
+                    && current.properties.color_scheme));
             if (current && current.colors) {
                 repaint_attempted_theme = null;
                 return;
@@ -848,8 +852,10 @@ function applyThemeId(themeId, mode, themeKey, s) {
     let spec = themeSpecFor(resolvedId, s || {});
     if (!spec) {
         logDebug("applyThemeId: " + resolvedId + " is not available.");
+        debugLog("apply", resolvedId + " is not available, nothing to enable");
         return Promise.resolve();
     }
+    debugLog("apply", spec.kind + " " + spec.id + " mode=" + mode);
 
     if (spec.kind === "custom") {
         return withTimeout(applyCustomTheme(spec, mode), "theme.update (custom)");
@@ -975,6 +981,7 @@ const EVENTS_MAX = 40;
 let recent_events = [];
 
 function pushEvent(kind, detail) {
+    debugLog("event", kind + " " + detail);
     recent_events.push({t: new Date().toISOString().slice(11, 19), kind: kind, detail: String(detail)});
     if (recent_events.length > EVENTS_MAX) {
         recent_events = recent_events.slice(-EVENTS_MAX);
@@ -999,6 +1006,7 @@ const SCHEME_POLL_MS = 2000;
 let scheme_poll_timer = null;
 
 function recordSystemDark(dark, reason) {
+    debugLog("os-record", (dark ? "dark" : "light") + " (" + reason + "), was " + system_dark);
     if (system_dark === dark) {
         return Promise.resolve(false);
     }
@@ -1034,6 +1042,7 @@ function syncSystemDarkFromBackground(mode, reason) {
     // change event (extension event page may be asleep, options page runs no
     // content script, about: pages have none at all).
     let live = background_scheme_query.matches;
+    debugLog("os-sync", "reason=" + reason + " stored=" + system_dark + " live=" + live);
     if (live !== system_dark) {
         recordSystemDark(live, "background media query on " + reason);
     }
@@ -1156,11 +1165,15 @@ function applyDesired(s, desired, override, reason) {
 
     if (unchanged && !s.applyOnFocus && FORCED_REASONS.indexOf(reason) === -1) {
         logDebug("tick: nothing to do (only switching on schedule changes).");
+        debugLog("skip", "nothing to do (" + reason + ")");
         return;
     }
 
     logDebug("tick: " + slot + " / " + themeId + " / scheme=" + contentScheme
         + " (previous " + JSON.stringify(last_applied) + ")");
+    debugLog("tick", "reason=" + reason + " slot=" + slot + " theme=" + themeId
+        + " scheme=" + contentScheme + " os=" + system_dark
+        + " mode=" + mode + " unchanged=" + unchanged);
 
     pushEvent("apply", slot + " " + themeId + " mode=" + mode + " os=" + system_dark
         + " reason=" + reason);
@@ -1387,6 +1400,9 @@ function setGeolocation() {
 
 function init() {
     logDebug("0 - Start init");
+    debugLoad();
+    debugLog("init", "startup: version " + (browser.runtime.getManifest
+        ? browser.runtime.getManifest().version : "?"));
 
     return setStorage({
         [CHANGE_MODE_KEY]: { mode: DEFAULT_CHANGE_MODE },
@@ -1509,6 +1525,8 @@ if (browser.runtime && browser.runtime.onMessage) {
         if (!message || typeof message !== "object") {
             return;
         }
+        debugLog("message", message.type + (message.dark === undefined ? "" : " dark=" + message.dark)
+            + (message.themeId ? " theme=" + message.themeId : ""));
 
         if (message.type === "autodark-scheme") {
             // Only trust content-script reports while pages actually follow
@@ -1545,6 +1563,14 @@ if (browser.runtime && browser.runtime.onMessage) {
 
         if (message.type === "autodark-preview") {
             return previewTheme(message.themeId).then(() => true, () => false);
+        }
+
+        // The trace lives here: this page is the only one that sees a tick.
+        if (message.type === "autodark-debug") {
+            return Promise.resolve(debugText());
+        }
+        if (message.type === "autodark-debug-clear") {
+            return debugClear().then(() => true);
         }
     });
 }

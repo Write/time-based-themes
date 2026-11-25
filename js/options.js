@@ -801,7 +801,19 @@ function renderDiagnostics() {
         ((events && events.check) || []).slice(-15).forEach((event) => {
             lines.push("  " + event.t + "  " + event.kind + "  " + event.detail);
         });
+
+        // The background's own trace: every message, tick, OS report and theme
+        // call, in order. Without it "it does not switch" is guesswork.
+        let trace = browser.runtime.sendMessage({type: "autodark-debug"})
+            .catch((error) => "trace unavailable: " + error);
+        let paintedNow = current && current.properties
+            ? JSON.stringify(current.properties.color_scheme || null) : "null";
+        lines.push("background trace (newest last), theme colour_scheme right now: " + paintedNow);
         node.textContent = lines.join("\n");
+        return trace.then((text) => {
+            node.textContent = lines.join("\n") + "\n"
+                + (text && text.length ? text : "(empty — no decision taken since install)");
+        });
     }, (error) => {
         node.textContent = "diagnostics failed: " + error;
     });
@@ -828,6 +840,25 @@ function start() {
     wireCustomThemes();
     showVersion();
     renderDiagnostics();
+    on($("copy-diagnostics"), "click", () => {
+        let text = ($("diagnostics") || {}).textContent || "";
+        let done = navigator.clipboard && navigator.clipboard.writeText
+            ? navigator.clipboard.writeText(text)
+            : Promise.reject(new Error("clipboard unavailable"));
+        done.then(() => showMessage("force-message", "Diagnostics copied."),
+            () => {
+                // Fall back to selecting the block so Cmd+C works.
+                let node = $("diagnostics");
+                if (node && window.getSelection) {
+                    let range = document.createRange();
+                    range.selectNodeContents(node);
+                    let selection = window.getSelection();
+                    selection.removeAllRanges();
+                    selection.addRange(range);
+                    showMessage("force-message", "Selected: press ⌘C to copy.");
+                }
+            });
+    });
     on($("force-tick"), "click", () => {
         browser.runtime.sendMessage({type: "autodark-tick", reason: "settings"})
             .then(() => showMessage("force-message", "tick requested"))
