@@ -109,6 +109,18 @@ body.mode-location-suntimes .logo.day-mode {
     white-space: pre-wrap;
     word-break: break-word;
     user-select: text;
+    /* The trace is long: keep it in a scrollable box that sticks to the newest
+       line instead of stretching the whole settings page. */
+    max-height: 22rem;
+    overflow: auto;
+    overscroll-behavior: contain;
+}
+
+.live-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    font-size: 0.9rem;
 }
 
 main {

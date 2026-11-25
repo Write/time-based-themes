@@ -632,7 +632,9 @@ test("a reload corrects a stale stored OS scheme", async () => {
 // it. Detection therefore never depends on a web page being open and firing a
 // change event — that dependency is what made it look random.
 test("a plain periodic tick re-reads the OS scheme", async () => {
-    const {sandbox, storage, calls} = run();
+    // The enabled theme follows the OS, so the media query can see it.
+    const themeCurrent = {properties: {color_scheme: "system"}};
+    const {sandbox, storage, calls} = run({getCurrent: () => themeCurrent});
     await systemSettings(storage, {"autodarksystemDark": {check: false}});
     await vm.runInContext("init().then(() => switch_queue)", sandbox);
     assert.strictEqual(lastTheme(calls), "my-day@x");
@@ -788,28 +790,25 @@ test("a built-in dark theme pins the content scheme to dark by day", async () =>
         "dark chrome must not sit over light pages");
 });
 
-test("reports from pages pinned to a scheme cannot flip the theme", async () => {
+// Pinned slot schemes used to make every page report the pinned value, which the
+// extension read back as an OS signal: the two slots then alternated forever
+// (the 2.0.11/2.0.12 ping-pong). In system-theme mode the content override is
+// now forced to "system", so pages follow the OS whatever the slots declare and
+// the echo cannot happen.
+test("pinned slot schemes cannot make pages echo a fixed value", async () => {
     const {sandbox, storage, calls} = run();
-    // Both slots pin a literal scheme: every page then reports that pinned
-    // value instead of the OS one. Trusting it made 2.0.11 alternate between
-    // the day and the night theme forever.
     await systemSettings(storage, {
         "autodarkdayScheme": {value: "light"},
         "autodarknightScheme": {value: "light"}
     });
 
     await vm.runInContext("init().then(() => switch_queue)", sandbox);
-    vm.runInContext("setupEventHandlers()", sandbox);
-    const listener = calls.messageListeners[0];
 
-    for (let i = 0; i < 6; i++) {
-        await listener({type: "autodark-scheme", dark: i % 2 === 0});
-        await new Promise((resolve) => setTimeout(resolve, 20));
-    }
-
-    const themes = calls.setEnabled.filter(([, on]) => on === true).map(([id]) => id);
-    const flips = themes.length;
-    assert.ok(flips <= 4, "pinned reports must not make the theme oscillate: " + themes.join(" -> "));
+    assert.ok(calls.overrides.includes("system"),
+        "system-theme mode must force overrideContentColorScheme to system, got: "
+        + JSON.stringify(calls.overrides));
+    assert.ok(!calls.overrides.includes("light") && !calls.overrides.includes("dark"),
+        "a pinned slot scheme must never be written as the content override");
 });
 
 // A theme that declares a literal color_scheme makes every page report that

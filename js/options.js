@@ -755,6 +755,41 @@ function wireCustomThemes() {
 // Everything needed to answer "why did the theme not follow the OS?" without a
 // round trip: what the extension thinks the OS is, what it last applied, and
 // what the browser reports right now.
+// Replacing textContent on every refresh reset the scroll position, so reading
+// the end of a live trace was impossible. Only write when the text changed, and
+// follow the newest line if the reader was already at the bottom.
+function setDiagnosticsText(node, text) {
+    if (node.textContent === text) {
+        return;
+    }
+    let follow = node.scrollHeight - node.scrollTop - node.clientHeight < 48;
+    node.textContent = text;
+    if (follow) {
+        node.scrollTop = node.scrollHeight;
+    }
+}
+
+function startLiveDiagnostics() {
+    let box = $("live-diagnostics");
+    if (!box || live_timer !== null) {
+        return;
+    }
+    let tick = () => {
+        if (box.checked && document.visibilityState !== "hidden") {
+            renderDiagnostics();
+        }
+    };
+    live_timer = setInterval(tick, 2000);
+    window.addEventListener("pagehide", () => {
+        if (live_timer !== null) {
+            clearInterval(live_timer);
+            live_timer = null;
+        }
+    });
+}
+
+let live_timer = null;
+
 function renderDiagnostics() {
     let node = $("diagnostics");
     if (!node) {
@@ -825,8 +860,8 @@ function renderDiagnostics() {
         lines.push("background trace (newest last), theme colour_scheme right now: " + paintedNow);
         node.textContent = lines.join("\n");
         return trace.then((text) => {
-            node.textContent = lines.join("\n") + "\n"
-                + (text && text.length ? text : "(empty — no decision taken since install)");
+            setDiagnosticsText(node, lines.join("\n") + "\n"
+                + (text && text.length ? text : "(empty — no decision taken since install)"));
         });
     }, (error) => {
         node.textContent = "diagnostics failed: " + error;
@@ -854,6 +889,7 @@ function start() {
     wireCustomThemes();
     showVersion();
     renderDiagnostics();
+    startLiveDiagnostics();
     on($("reset-diagnostics"), "click", () => {
         browser.runtime.sendMessage({type: "autodark-debug-clear"})
             .then(() => setTimeout(renderDiagnostics, 300))

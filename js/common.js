@@ -529,21 +529,12 @@ function sanitizeTheme(theme) {
 
 // Re-apply the built-in Light/Dark substitution: those themes pin the OS
 // light/dark signal, which stops detection entirely.
-function substituteBuiltInTheme(themeId, themeKey, s) {
-    if (s.changeMode !== "system-theme") {
-        return themeId;
-    }
-    // The built-in Light and Dark themes pin the OS light/dark signal: a page
-    // (and the background query) then reports that pinned value forever, which
-    // is how a light OS ended up painted dark. Neither belongs in system-theme
-    // mode, whichever slot asks for it — the System theme follows the OS by
-    // itself.
-    if (themeId !== "firefox-compact-light@mozilla.org"
-        && themeId !== "firefox-compact-dark@mozilla.org") {
-        return themeId;
-    }
-    logDebug("substituteBuiltInTheme - " + themeId + " pins the OS scheme; using System theme (auto).");
-    return "default-theme@mozilla.org";
+function substituteBuiltInTheme(themeId) {
+    // A built-in theme is applied as asked. This used to swap Light and Dark for
+    // the System theme in system-theme mode, on the theory that they "pin" the
+    // OS signal - the effect on screen was that choosing Light enabled
+    // "Par défaut" and nothing ever changed.
+    return themeId;
 }
 
 // ---------------------------------------------------------------------------
@@ -579,6 +570,13 @@ function resolveContentScheme(scheme, slot, mode, themeId) {
         return "dark";
     }
     return slot === SLOT_DAY ? "light" : "dark";
+}
+
+// In system-theme mode content must follow the OS, not the theme we happen to
+// have enabled: a theme that pins light/dark makes every query - and every page
+// report - repeat that value forever, which is how a dark OS stayed light.
+function systemContentScheme(value) {
+    return value === "auto" || value === "system" ? "system" : value;
 }
 
 function applyContentScheme(value) {
@@ -933,7 +931,7 @@ function applyThemeId(themeId, mode, themeKey, s) {
     }
 
     let resolvedId = systemFollowingThemeId(
-        substituteBuiltInTheme(themeId, themeKey, s || {}), mode);
+        substituteBuiltInTheme(themeId), mode);
     let spec = themeSpecFor(resolvedId, s || {});
     if (!spec) {
         logDebug("applyThemeId: " + resolvedId + " is not available.");
@@ -1121,6 +1119,23 @@ function handleSchemeReport(dark, reason) {
 // but still catches genuine OS changes in many setups.
 const background_scheme_query = window.matchMedia("(prefers-color-scheme: dark)");
 
+// Whether the theme that is actually enabled pins a literal colour scheme. When
+// it does, the media query above repeats that value instead of the OS, so OS
+// observations must come from content-script reports only.
+let current_pins_scheme = false;
+
+function refreshCurrentPaint() {
+    if (!browser.theme || !browser.theme.getCurrent) {
+        return Promise.resolve();
+    }
+    return browser.theme.getCurrent().then((theme) => {
+        let scheme = theme && theme.properties ? theme.properties.color_scheme : null;
+        current_pins_scheme = scheme === "light" || scheme === "dark";
+        debugLog("paint", "color_scheme=" + JSON.stringify(scheme || null)
+            + " pins_os=" + current_pins_scheme);
+    }, () => undefined);
+}
+
 function syncSystemDarkFromBackground(mode, reason) {
     if (mode !== "system-theme") {
         return;
@@ -1132,6 +1147,14 @@ function syncSystemDarkFromBackground(mode, reason) {
     // worked when a web page happened to be open and happened to fire its
     // change event (extension event page may be asleep, options page runs no
     // content script, about: pages have none at all).
+    if (current_pins_scheme) {
+        // Built-in Light/Dark and custom themes that declare color_scheme make
+        // this query echo the theme, not the OS: skip it rather than record a
+        // lie. Content reports still arrive (they follow the OS once
+        // overrideContentColorScheme is "system").
+        debugLog("os-sync", "reason=" + reason + " skipped: enabled theme pins the scheme");
+        return;
+    }
     let live = background_scheme_query.matches;
     debugLog("os-sync", "reason=" + reason + " stored=" + system_dark + " live=" + live);
     if (live !== system_dark) {
@@ -1166,6 +1189,9 @@ function startSchemePoll(mode) {
             } catch (error) {
                 // diagnostics only
             }
+        }
+        if (current_pins_scheme) {
+            return;
         }
         let live = background_scheme_query.matches;
         if (live === system_dark) {
@@ -1285,8 +1311,10 @@ function applyDesired(s, desired, override, reason) {
     let switchedTheme = last_applied.slot !== slot || last_applied.themeId !== themeId;
     last_applied = { slot: slot, themeId: themeId, scheme: contentScheme, mode: mode };
 
-    return withTimeout(applyContentScheme(contentScheme), "browserSettings.overrideContentColorScheme")
+    let contentValue = mode === "system-theme" ? systemContentScheme(contentScheme) : contentScheme;
+    return withTimeout(applyContentScheme(contentValue), "browserSettings.overrideContentColorScheme")
         .then(() => applyThemeId(themeId, mode, themeKey, s))
+        .then(() => refreshCurrentPaint())
         .then(() => setCurrentMode(slotLabel(slot)))
         .then(() => (modeChanged ? browser.storage.local.set({ [LAST_MODE_KEY]: { mode: mode } }) : undefined))
         .then(() => {
@@ -1614,6 +1642,9 @@ function setupEventHandlers() {
     // so a change is believed immediately instead of waiting for a page.
     if (typeof background_scheme_query.addEventListener === "function") {
         background_scheme_query.addEventListener("change", () => {
+            if (current_pins_scheme) {
+                return;
+            }
             getSettings().then((s) => {
                 if (s.changeMode !== "system-theme") {
                     return;
