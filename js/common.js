@@ -572,11 +572,15 @@ function resolveContentScheme(scheme, slot, mode, themeId) {
     return slot === SLOT_DAY ? "light" : "dark";
 }
 
-// In system-theme mode content must follow the OS, not the theme we happen to
-// have enabled: a theme that pins light/dark makes every query - and every page
-// report - repeat that value forever, which is how a dark OS stayed light.
+// browserSettings.overrideContentColorScheme accepts exactly "light", "dark"
+// and "auto" (MDN). "system" is NOT one of them: the call was rejected, the
+// override stayed at its default, and content kept following the *theme* - so
+// a pinning night theme made every page report "dark" forever and the OS
+// witness we relied on never existed. Map to "auto" and log a rejection.
+const CONTENT_SCHEME_VALUES = ["light", "dark", "auto"];
+
 function systemContentScheme(value) {
-    return value === "auto" || value === "system" ? "system" : value;
+    return CONTENT_SCHEME_VALUES.indexOf(value) === -1 ? "auto" : value;
 }
 
 function applyContentScheme(value) {
@@ -590,7 +594,16 @@ function applyContentScheme(value) {
     last_content_scheme = value;
     logDebug("Setting overrideContentColorScheme to " + value);
     return browser.browserSettings.overrideContentColorScheme.set({ value: value })
-        .catch(onError);
+        .then((ok) => {
+            if (ok === false) {
+                debugLog("error", "overrideContentColorScheme refused " + value);
+            }
+        })
+        .catch((error) => {
+            debugLog("error", "overrideContentColorScheme(" + value + "): "
+                + (error && error.message));
+            onError(error);
+        });
 }
 
 // ---------------------------------------------------------------------------
@@ -1323,7 +1336,9 @@ function applyDesired(s, desired, override, reason) {
     let switchedTheme = last_applied.slot !== slot || last_applied.themeId !== themeId;
     last_applied = { slot: slot, themeId: themeId, scheme: contentScheme, mode: mode };
 
-    let contentValue = mode === "system-theme" ? systemContentScheme(contentScheme) : contentScheme;
+    // "system" is our own word for "leave the pages to the OS"; the API only
+    // has "light", "dark" and "auto", so every value goes through the map.
+    let contentValue = systemContentScheme(contentScheme);
     return withTimeout(applyContentScheme(contentValue), "browserSettings.overrideContentColorScheme")
         .then(() => applyThemeId(themeId, mode, themeKey, s))
         .then(() => refreshCurrentPaint())
@@ -1722,12 +1737,15 @@ if (browser.runtime && browser.runtime.onMessage) {
             if (message.dark === system_dark) {
                 return;
             }
-            // A page only speaks for the OS while nothing pins its scheme:
-            // with a literal light/dark content override every page reports
-            // that fixed value, and trusting it made two themes ping-pong
-            // forever (the 2.0.11 report).
-            if (last_content_scheme && last_content_scheme !== "system") {
-                logDebug("content script OS report ignored: pages are pinned to " + last_content_scheme);
+            // A page can only speak for the OS while nothing pins its scheme:
+            // with a literal color_scheme theme every page reports that fixed
+            // value, and trusting it made two themes ping-pong forever (the
+            // 2.0.11 report). A report that merely repeats the pinned scheme is
+            // therefore an echo, not an observation.
+            if (current_pins_scheme
+                && !!message.dark === (current_declared_scheme === "dark")) {
+                logDebug("content script OS report ignored: it repeats the pinned scheme "
+                    + current_declared_scheme);
                 return Promise.resolve(true);
             }
             // Our own settings page is a privileged document: its query follows

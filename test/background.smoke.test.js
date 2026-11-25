@@ -582,12 +582,16 @@ test("system mode applies the daytime theme while the OS is light", async () => 
 
     assert.strictEqual(lastTheme(calls), "my-day@x",
         "a light OS must use the daytime theme, whatever the clock says");
-    assert.deepStrictEqual(calls.overrides.slice(-1), ["system"],
+    assert.deepStrictEqual(calls.overrides.slice(-1), ["auto"],
         "pages must be left on the OS scheme in system mode");
 });
 
 test("a content script report flips the theme without waiting for an alarm", async () => {
-    const {sandbox, storage, calls} = run();
+    // A page only speaks for the OS when the browser is not showing it a theme
+    // with a literal color_scheme, so this theme follows the system.
+    const {sandbox, storage, calls} = run({
+        themeCurrent: {colors: {frame: "#1c1b22"}, properties: {color_scheme: "system"}}
+    });
     await systemSettings(storage);
 
     await vm.runInContext("init().then(() => switch_queue)", sandbox);
@@ -669,7 +673,7 @@ test("system mode keeps pages on the OS scheme even when one is pinned", async (
 
     await vm.runInContext("init().then(() => switch_queue)", sandbox);
 
-    assert.deepStrictEqual(calls.overrides.slice(-1), ["system"],
+    assert.deepStrictEqual(calls.overrides.slice(-1), ["auto"],
         "system mode must leave pages on the OS scheme");
 });
 
@@ -804,7 +808,7 @@ test("pinned slot schemes cannot make pages echo a fixed value", async () => {
 
     await vm.runInContext("init().then(() => switch_queue)", sandbox);
 
-    assert.ok(calls.overrides.includes("system"),
+    assert.ok(calls.overrides.includes("auto"),
         "system-theme mode must force overrideContentColorScheme to system, got: "
         + JSON.stringify(calls.overrides));
     assert.ok(!calls.overrides.includes("light") && !calls.overrides.includes("dark"),
@@ -934,7 +938,7 @@ test("no overlay is applied when the theme already follows the OS", async () => 
 
     assert.strictEqual(calls.themeUpdate.length, 0,
         "a theme that follows the OS must not be re-sent as an overlay");
-    assert.deepStrictEqual(calls.overrides.slice(-1), ["system"]);
+    assert.deepStrictEqual(calls.overrides.slice(-1), ["auto"]);
 });
 
 test("the page colour scheme follows the OS by default", async () => {
@@ -953,12 +957,12 @@ test("the page colour scheme follows the OS by default", async () => {
 
     vm.runInContext("__fixedNow = " + (noonMs + 12 * 3600000) + "; Date.now = () => __fixedNow;", sandbox);
     await vm.runInContext("init().then(() => switch_queue)", sandbox);
-    assert.deepStrictEqual(calls.overrides.slice(-1), ["system"],
+    assert.deepStrictEqual(calls.overrides.slice(-1), ["auto"],
         "the day slot must leave the page scheme to the OS");
 
     vm.runInContext("__fixedNow = " + (noonMs + 23 * 3600000) + ";", sandbox);
     await vm.runInContext("queueTick('alarm')", sandbox);
-    assert.deepStrictEqual(calls.overrides.slice(-1), ["system"],
+    assert.deepStrictEqual(calls.overrides.slice(-1), ["auto"],
         "the night slot must leave the page scheme to the OS");
 });
 
