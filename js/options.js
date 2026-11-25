@@ -9,10 +9,10 @@
 // ---------------------------------------------------------------------------
 
 const SCHEME_CHOICES = [
-    ["auto", "Match the theme (light by day, dark at night)"],
+    ["system", "Follow my operating system (default)"],
     ["light", "Always light"],
     ["dark", "Always dark"],
-    ["system", "Follow my operating system"],
+    ["auto", "Match the theme (light by day, dark at night)"],
     ["off", "Leave Firefox's setting alone"]
 ];
 
@@ -278,7 +278,7 @@ function renderExtraSlots(s) {
             option.textContent = value === "auto" ? "match the theme" : text;
             schemeSelect.appendChild(option);
         });
-        schemeSelect.value = slot.scheme || "auto";
+        schemeSelect.value = slot.scheme || "system";
         schemeSelect.addEventListener("change", () => {
             updateSlot(slot.id, {scheme: schemeSelect.value});
         });

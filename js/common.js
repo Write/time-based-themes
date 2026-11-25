@@ -62,7 +62,8 @@ const DEFAULT_SUNRISE_TIME = "08:00";
 const DEFAULT_SUNSET_TIME = "20:00";
 const DEFAULT_DEBUG_MODE = false;
 const DEFAULT_APPLY_ON_FOCUS = true;
-const DEFAULT_SCHEME = "auto";
+// Jo (m01265): the default must follow the operating system, in every mode.
+const DEFAULT_SCHEME = "system";
 const SCHEME_VALUES = ["auto", "light", "dark", "system", "off"];
 
 // Reasons a tick may run. With "change only on start-up" enabled, only the

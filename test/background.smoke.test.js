@@ -269,7 +269,9 @@ test("background page boots and applies the daytime theme", async () => {
         "autodarkdaytimeTheme": {themeId: "my-day@x"},
         "autodarknighttimeTheme": {themeId: "my-night@x"},
         "autodarksunriseTime": {time: "08:00"},
-        "autodarksunsetTime": {time: "20:00"}
+        "autodarksunsetTime": {time: "20:00"},
+        "autodarkdayScheme": {value: "auto"},
+        "autodarknightScheme": {value: "auto"}
     });
 
     await vm.runInContext("init().then(() => switch_queue)", sandbox);
@@ -293,7 +295,9 @@ test("a tick at night switches to the nighttime theme once", async () => {
         "autodarkdaytimeTheme": {themeId: "my-day@x"},
         "autodarknighttimeTheme": {themeId: "my-night@x"},
         "autodarksunriseTime": {time: "08:00"},
-        "autodarksunsetTime": {time: "20:00"}
+        "autodarksunsetTime": {time: "20:00"},
+        "autodarkdayScheme": {value: "auto"},
+        "autodarknightScheme": {value: "auto"}
     });
 
     vm.runInContext("__fixedNow = " + (noonMs + 12 * 3600000) + "; Date.now = () => __fixedNow;", sandbox);
@@ -637,7 +641,9 @@ test("a built-in light theme is honoured at night", async () => {
         "autodarkdaytimeTheme": {themeId: "my-day@x"},
         "autodarknighttimeTheme": {themeId: LIGHT},
         "autodarksunriseTime": {time: "08:00"},
-        "autodarksunsetTime": {time: "20:00"}
+        "autodarksunsetTime": {time: "20:00"},
+        "autodarkdayScheme": {value: "auto"},
+        "autodarknightScheme": {value: "auto"}
     });
 
     vm.runInContext("__fixedNow = " + (noonMs + 12 * 3600000) + "; Date.now = () => __fixedNow;", sandbox);
@@ -663,7 +669,9 @@ test("a built-in dark theme pins the content scheme to dark by day", async () =>
         "autodarkdaytimeTheme": {themeId: DARK},
         "autodarknighttimeTheme": {themeId: DARK},
         "autodarksunriseTime": {time: "08:00"},
-        "autodarksunsetTime": {time: "20:00"}
+        "autodarksunsetTime": {time: "20:00"},
+        "autodarkdayScheme": {value: "auto"},
+        "autodarknightScheme": {value: "auto"}
     });
 
     vm.runInContext("__fixedNow = " + (noonMs + 12 * 3600000) + "; Date.now = () => __fixedNow;", sandbox);
@@ -807,4 +815,29 @@ test("no overlay is applied when the theme already follows the OS", async () => 
     assert.strictEqual(calls.themeUpdate.length, 0,
         "a theme that follows the OS must not be re-sent as an overlay");
     assert.deepStrictEqual(calls.overrides.slice(-1), ["system"]);
+});
+
+test("the page colour scheme follows the OS by default", async () => {
+    // Jo (m01265): with nothing configured, pages must follow the operating
+    // system — day and night, whatever themes are installed.
+    const {sandbox, storage, calls} = run();
+    const noonMs = Date.now() - (Date.now() % 86400000);
+
+    await storage.api.set({
+        "autodarkchangeMode": {mode: "manual-suntimes"},
+        "autodarkdaytimeTheme": {themeId: "my-day@x"},
+        "autodarknighttimeTheme": {themeId: "my-night@x"},
+        "autodarksunriseTime": {time: "08:00"},
+        "autodarksunsetTime": {time: "20:00"}
+    });
+
+    vm.runInContext("__fixedNow = " + (noonMs + 12 * 3600000) + "; Date.now = () => __fixedNow;", sandbox);
+    await vm.runInContext("init().then(() => switch_queue)", sandbox);
+    assert.deepStrictEqual(calls.overrides.slice(-1), ["system"],
+        "the day slot must leave the page scheme to the OS");
+
+    vm.runInContext("__fixedNow = " + (noonMs + 23 * 3600000) + ";", sandbox);
+    await vm.runInContext("queueTick('alarm')", sandbox);
+    assert.deepStrictEqual(calls.overrides.slice(-1), ["system"],
+        "the night slot must leave the page scheme to the OS");
 });
