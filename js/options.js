@@ -752,6 +752,56 @@ function wireCustomThemes() {
 
 // "Which version am I actually running?" was an unanswerable question while
 // chasing the reload bugs: print it.
+// Everything needed to answer "why did the theme not follow the OS?" without a
+// round trip: what the extension thinks the OS is, what it last applied, and
+// what the browser reports right now.
+function renderDiagnostics() {
+    let node = $("diagnostics");
+    if (!node) {
+        return;
+    }
+    let lines = [];
+    lines.push("version: " + browser.runtime.getManifest().version);
+
+    let calls = [
+        browser.storage.local.get(null).catch((e) => ({error: String(e)})),
+        browser.theme && browser.theme.getCurrent
+            ? browser.theme.getCurrent().catch((e) => ({error: String(e)}))
+            : Promise.resolve(null),
+        browser.browserSettings && browser.browserSettings.overrideContentColorScheme
+            ? browser.browserSettings.overrideContentColorScheme.get()
+                .catch((e) => ({error: String(e)}))
+            : Promise.resolve(null),
+        browser.management && browser.management.getAll
+            ? browser.management.getAll().catch(() => [])
+            : Promise.resolve([])
+    ];
+
+    Promise.all(calls).then(([storage, current, override, extensions]) => {
+        lines.push("media query (prefers-color-scheme: dark): "
+            + (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"));
+        lines.push("changeMode: " + JSON.stringify(storage["autodarkchangeMode"]));
+        lines.push("systemDark stored: " + JSON.stringify(storage["autodarksystemDark"]));
+        lines.push("currentMode: " + JSON.stringify(storage["autodarkcurrentMode"]));
+        lines.push("lastMode: " + JSON.stringify(storage["autodarklastMode"]));
+        lines.push("dayTheme: " + JSON.stringify(storage["autodarkdaytimeTheme"]));
+        lines.push("nightTheme: " + JSON.stringify(storage["autodarknighttimeTheme"]));
+        lines.push("dayScheme: " + JSON.stringify(storage["autodarkdayScheme"]));
+        lines.push("nightScheme: " + JSON.stringify(storage["autodarknightScheme"]));
+        lines.push("startupOnly: " + JSON.stringify(storage["autodarkstartupOnly"]));
+        lines.push("overrideContentColorScheme: "
+            + JSON.stringify(override && (override.value || override.error)));
+        let scheme = current && current.properties && current.properties.color_scheme;
+        lines.push("theme.getCurrent color_scheme: " + JSON.stringify(scheme || null));
+        let enabled = (extensions || []).filter((e) => e.type === "theme" && e.enabled)
+            .map((e) => e.name + " <" + e.id + ">");
+        lines.push("enabled themes: " + (enabled.join(", ") || "none reported"));
+        node.textContent = lines.join("\n");
+    }, (error) => {
+        node.textContent = "diagnostics failed: " + error;
+    });
+}
+
 function showVersion() {
     let node = $("app-version");
     if (!node) {
@@ -772,6 +822,13 @@ function start() {
     wireBehaviour();
     wireCustomThemes();
     showVersion();
+    renderDiagnostics();
+    on($("force-tick"), "click", () => {
+        browser.runtime.sendMessage({type: "autodark-tick", reason: "settings"})
+            .then(() => showMessage("force-message", "tick requested"))
+            .then(() => setTimeout(renderDiagnostics, 800))
+            .catch(onError);
+    });
 
     loadThemes()
         .then(() => getSettings())

@@ -101,6 +101,16 @@ body.mode-location-suntimes .logo.day-mode {
     font-size: 0.85rem;
 }
 
+.diagnostics pre {
+    background: var(--code-bg, rgba(127, 127, 127, 0.12));
+    padding: 0.75rem;
+    border-radius: 6px;
+    font-size: 0.8rem;
+    white-space: pre-wrap;
+    word-break: break-word;
+    user-select: text;
+}
+
 main {
     max-width: 46rem;
     margin: 0 auto;

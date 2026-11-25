@@ -1213,8 +1213,8 @@ if (browser.runtime && browser.runtime.onMessage) {
             }
             return recordSystemDark(!!message.dark, "content script").then(() => {
                 getSettings().then((s) => {
-                    if (s.changeMode === "system-theme" && last_content_scheme === "system") {
-                        queueTick("scheme");
+                    if (s.changeMode === "system-theme") {
+                        queueTick("os-change");
                     }
                 }, onError);
             });
