@@ -490,6 +490,11 @@ function fillForm(s) {
 
     fillTimezoneSelect(s);
     fillAllThemeSelects(s);
+    let info = $("build-info");
+    if (info) {
+        info.textContent = installedThemes.length + " theme"
+            + (installedThemes.length === 1 ? "" : "s") + " available";
+    }
 
     $("random-interval").value = s.randomInterval || 0;
     $("day-scheme").value = s.dayScheme;
@@ -745,6 +750,18 @@ function wireCustomThemes() {
 // Start-up
 // ---------------------------------------------------------------------------
 
+// "Which version am I actually running?" was an unanswerable question while
+// chasing the reload bugs: print it.
+function showVersion() {
+    let node = $("app-version");
+    if (!node) {
+        return;
+    }
+    let manifest = browser.runtime && browser.runtime.getManifest
+        ? browser.runtime.getManifest() : null;
+    node.textContent = manifest && manifest.version ? "v" + manifest.version : "";
+}
+
 function start() {
     fillSchemeSelects();
     wireModeRadios();
@@ -754,6 +771,7 @@ function start() {
     wireScheme();
     wireBehaviour();
     wireCustomThemes();
+    showVersion();
 
     loadThemes()
         .then(() => getSettings())

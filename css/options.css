@@ -88,6 +88,19 @@ body.mode-location-suntimes .logo.day-mode {
     font-weight: 600;
 }
 
+.version {
+    font-size: 0.55em;
+    font-weight: 400;
+    color: var(--muted);
+    vertical-align: middle;
+}
+
+.build-info {
+    margin-left: 0.6rem;
+    color: var(--muted);
+    font-size: 0.85rem;
+}
+
 main {
     max-width: 46rem;
     margin: 0 auto;

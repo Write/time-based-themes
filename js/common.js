@@ -68,6 +68,10 @@ const SCHEME_VALUES = ["auto", "light", "dark", "system", "off"];
 // Reasons a tick may run. With "change only on start-up" enabled, only the
 // reasons in this set are allowed to switch anything.
 const FORCED_REASONS = ["startup", "settings", "toolbar", "install"];
+// An OS light/dark flip must re-apply even in "change on startup only" mode, but
+// it must NOT bypass the "nothing to do" shortcut: our own setEnabled() fires
+// theme.onUpdated, and forcing there would loop forever.
+const STARTUP_BYPASS_REASONS = FORCED_REASONS.concat(["os-change"]);
 
 // Keys whose change requires re-evaluating the schedule.
 const REACTIVE_KEYS = [
@@ -762,7 +766,7 @@ function tick(reason) {
         // a browser restarted while no content script was running).
         syncSystemDarkFromBackground(s.changeMode);
 
-        if (s.startupOnly && FORCED_REASONS.indexOf(reason) === -1) {
+        if (s.startupOnly && STARTUP_BYPASS_REASONS.indexOf(reason) === -1) {
             logDebug("tick ignored: change-on-startup-only is enabled.");
             return;
         }
@@ -1135,16 +1139,29 @@ function setupEventHandlers() {
                 if (s.changeMode !== "system-theme") {
                     return;
                 }
-                if (last_content_scheme === "system") {
-                    // Pages report the OS directly; they win over the browser
-                    // theme this query follows.
-                    return;
-                }
                 logDebug("Background media query changed to "
                     + (background_scheme_query.matches ? "dark" : "light"));
                 recordSystemDark(background_scheme_query.matches, "media query")
-                    .then(() => queueTick("scheme"));
+                    .then(() => queueTick("os-change"));
             }, onError);
+        });
+    }
+
+    // theme.onUpdated is the documented OS light/dark signal (Firefox 95+), and
+    // the only one that still arrives when every page has its scheme pinned.
+    // It also fires for our own setEnabled() calls; applyDesired() short-circuits
+    // those because the state it wants is already the state on screen.
+    if (caps.theme && browser.theme && browser.theme.onUpdated
+        && browser.theme.onUpdated.addListener) {
+        browser.theme.onUpdated.addListener((updateInfo) => {
+            let theme = updateInfo && updateInfo.theme;
+            let scheme = theme && theme.color_scheme;
+            let known = scheme === "dark" || scheme === "light";
+            logDebug("theme.onUpdated: " + (known ? scheme : "no scheme reported"));
+            let seed = known
+                ? recordSystemDark(scheme === "dark", "browser theme")
+                : Promise.resolve();
+            seed.then(() => queueTick("os-change")).catch(onError);
         });
     }
 
