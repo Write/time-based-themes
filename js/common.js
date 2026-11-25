@@ -1580,17 +1580,10 @@ function init() {
         .then((s) => {
             return ensureTickAlarm(s).then(() => s);
         })
-        .then((s) => {
-            // Leaving system-theme mode: drop any color_scheme overlay so the
-            // plain theme is painted again.
-            return browser.storage.local.get(LAST_MODE_KEY).then((obj) => {
-                let previous = obj[LAST_MODE_KEY] ? obj[LAST_MODE_KEY].mode : null;
-                if (previous === "system-theme" && s.changeMode !== "system-theme") {
-                    logDebug("Left system-theme mode; clearing the theme overlay.");
-                    return resetOverlay();
-                }
-            });
-        })
+        // No overlay teardown here. It used to call theme.reset() on every start
+        // after leaving system-theme mode, and theme.reset() repaints the default
+        // theme (Firefox bug 1415267) - which is why Firefox greeted the user
+        // with "Par défaut" instead of the theme the schedule had chosen.
         .then(() => {
             if (caps.windows) {
                 browser.windows.onFocusChanged.addListener((windowId) => {
