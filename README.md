@@ -111,7 +111,7 @@ web-ext run --source-dir .          # or about:debugging → Load Temporary Add-
 ## Development
 
 ```bash
-node --test test/     # 26 tests: schedule unit tests, background smoke test, packaging
+node --test test/     # 27 tests: schedule unit tests, background smoke test, packaging
 ./build.sh            # tests + lint + package
 ./build.sh --fast     # package only
 ```

@@ -42,6 +42,10 @@ const LAST_MODE_KEY = KEY_PREFIX + "lastMode"; // {mode}
 
 const TICK_ALARM_NAME = KEY_PREFIX + "tick";
 
+// How long the options page preview keeps a candidate theme on screen before
+// the schedule is restored (issue #61).
+const PREVIEW_DURATION_MS = 20000;
+
 // Theme values that are not installed theme ids.
 const CUSTOM_THEME_PREFIX = "custom:";
 const CUSTOM_DAY = CUSTOM_THEME_PREFIX + "day";
@@ -82,6 +86,7 @@ let DEFAULT_NIGHTTIME_THEME = "";
 // the alarm, the focus listener, a content-script scheme report and the
 // options page can otherwise interleave and repaint the wrong theme.
 let switch_queue = Promise.resolve();
+let preview_timer = null;
 
 // What we last applied, so that re-running a tick is a no-op (theme churn was
 // what unchecked the DRM setting for some Linux users, issue #26).
@@ -625,11 +630,28 @@ function applyThemeId(themeId, mode, themeKey, s) {
         .then(() => (hadOverlay ? ensurePainted(spec.id) : undefined));
 }
 
-// Exposed for the options page preview button.
+// Exposed for the options page preview button (issue #61): the candidate theme
+// stays on screen for PREVIEW_DURATION_MS, then the schedule is restored.
 function previewTheme(themeId) {
     return getSettings().then((s) => {
+        if (!themeId) {
+            return undefined;
+        }
         logDebug("previewTheme " + themeId);
-        return applyThemeId(themeId, s.changeMode, DAYTIME_THEME_KEY, s);
+
+        return applyThemeId(themeId, s.changeMode, DAYTIME_THEME_KEY, s).then(() => {
+            if (preview_timer) {
+                clearTimeout(preview_timer);
+            }
+            preview_timer = setTimeout(() => {
+                preview_timer = null;
+                // Forget the last applied state so the next tick re-applies the
+                // scheduled theme even though the slot did not change.
+                last_applied = { slot: null, themeId: null, scheme: null, mode: null };
+                queueTick("preview-end");
+            }, PREVIEW_DURATION_MS);
+            return undefined;
+        });
     });
 }
 

@@ -106,6 +106,13 @@ function run() {
             get: (id) => Promise.resolve({id: id, enabled: enabledThemes[id] === true}),
             setEnabled: (id, enabled) => {
                 calls.setEnabled.push([id, enabled]);
+                if (enabled) {
+                    // Firefox keeps a single theme enabled: activating one
+                    // deactivates the others.
+                    Object.keys(enabledThemes).forEach((other) => {
+                        enabledThemes[other] = other === id;
+                    });
+                }
                 enabledThemes[id] = enabled;
                 return Promise.resolve();
             }
@@ -168,7 +175,9 @@ function run() {
     const sandbox = {
         browser: browser,
         console: console,
-        setTimeout: setTimeout,
+        // Real timers, but every delay is clamped: the preview restore in
+        // previewTheme() then becomes observable in milliseconds.
+        setTimeout: (fn, ms) => setTimeout(fn, Math.min(ms || 0, 5)),
         clearTimeout: clearTimeout,
         Promise: Promise,
         Date: Date,
@@ -323,4 +332,31 @@ test("no theme configured is a no-op instead of an error", async () => {
     await vm.runInContext("init().then(() => switch_queue)", sandbox);
 
     assert.strictEqual(calls.setEnabled.length, 0);
+});
+
+test("the preview theme is reverted to the schedule afterwards", async () => {
+    const {sandbox, storage, calls} = run();
+    const noonMs = Date.now() - (Date.now() % 86400000);
+
+    await storage.api.set({
+        "autodarkchangeMode": {mode: "manual-suntimes"},
+        "autodarkdaytimeTheme": {themeId: "my-day@x"},
+        "autodarknighttimeTheme": {themeId: "my-night@x"},
+        "autodarksunriseTime": {time: "08:00"},
+        "autodarksunsetTime": {time: "20:00"}
+    });
+
+    vm.runInContext("__fixedNow = " + (noonMs + 12 * 3600000) + "; Date.now = () => __fixedNow;", sandbox);
+    await vm.runInContext("init().then(() => switch_queue)", sandbox);
+
+    // Preview a theme that is not scheduled for this slot.
+    await vm.runInContext("previewTheme('firefox-compact-light@mozilla.org')", sandbox);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    const previewed = calls.setEnabled.some(([id, on]) => id === "firefox-compact-light@mozilla.org" && on === true);
+    assert.ok(previewed, "the previewed theme should be enabled");
+
+    const last = calls.setEnabled[calls.setEnabled.length - 1];
+    assert.deepStrictEqual(last, ["my-day@x", true],
+        "after the preview the scheduled theme must be restored");
 });
