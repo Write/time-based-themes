@@ -441,3 +441,29 @@ test("the toolbar menu keeps the day/night switch", async () => {
     assert.deepStrictEqual(last, ["my-night@x", true],
         "the menu override must switch to the nighttime theme immediately");
 });
+
+test("clicking the manual switch twice goes back to the scheduled theme", async () => {
+    const {sandbox, storage, calls} = run();
+    const noonMs = Date.now() - (Date.now() % 86400000);
+
+    await storage.api.set({
+        "autodarkchangeMode": {mode: "manual-suntimes"},
+        "autodarkdaytimeTheme": {themeId: "my-day@x"},
+        "autodarknighttimeTheme": {themeId: "my-night@x"},
+        "autodarksunriseTime": {time: "08:00"},
+        "autodarksunsetTime": {time: "20:00"}
+    });
+
+    vm.runInContext("__fixedNow = " + (noonMs + 12 * 3600000) + "; Date.now = () => __fixedNow;", sandbox);
+    await vm.runInContext("init().then(() => switch_queue)", sandbox);
+
+    await vm.runInContext("toggleFromToolbar().then(() => switch_queue)", sandbox);
+    assert.deepStrictEqual(calls.setEnabled[calls.setEnabled.length - 1], ["my-night@x", true],
+        "the first click shows the other theme");
+
+    // The bug: the second click asked for the same theme again, so nothing
+    // happened and the button looked dead.
+    await vm.runInContext("toggleFromToolbar().then(() => switch_queue)", sandbox);
+    assert.deepStrictEqual(calls.setEnabled[calls.setEnabled.length - 1], ["my-day@x", true],
+        "the second click must go back to the scheduled theme");
+});

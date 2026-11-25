@@ -920,10 +920,25 @@ function toggleFromToolbar() {
         return timesPromise.then((rawTimes) => {
             let times = applyOffsets(rawTimes, s);
             let desired = computeSlot(buildSlotConfig(s, times), Date.now());
-            let next = desired.slot === SLOT_DAY ? "night" : "day";
 
-            return browser.storage.local.set({
-                [KEY_PREFIX + "override"]: { mode: next, slot: desired.slot }
+            return browser.storage.local.get(KEY_PREFIX + "override").then((obj) => {
+                let ov = obj[KEY_PREFIX + "override"];
+                let showing = desired.slot === SLOT_DAY ? "day" : "night";
+
+                // An override already in force for this slot is what the user
+                // is looking at, so it has to be flipped back: toggling from
+                // the schedule slot alone would ask for the same theme twice
+                // and the second click would look dead.
+                if (ov && ov.slot === desired.slot
+                        && (ov.mode === "day" || ov.mode === "night")) {
+                    showing = ov.mode;
+                }
+
+                let next = showing === "day" ? "night" : "day";
+
+                return browser.storage.local.set({
+                    [KEY_PREFIX + "override"]: { mode: next, slot: desired.slot }
+                });
             }).then(() => {
                 // Force a re-apply even though the slot did not change.
                 last_applied = { slot: null, themeId: null, scheme: null, mode: null };
