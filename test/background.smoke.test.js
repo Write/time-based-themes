@@ -132,6 +132,9 @@ function run(options) {
         theme: {
             getCurrent() {
                 calls.getCurrentCount++;
+                if (typeof options.getCurrent === "function") {
+                    return Promise.resolve(options.getCurrent(calls.getCurrentCount));
+                }
                 return Promise.resolve(options.themeCurrent || {
                     colors: {frame: "#1c1b22", toolbar: "#1c1b22"},
                     images: {theme_ntp_background: "moz-extension://abc/ntp.png"},
@@ -753,4 +756,55 @@ test("the color_scheme workaround keeps an image theme's artwork", async () => {
         "the theme's own colours must be repainted, not the default ones");
     assert.strictEqual(overlay.images.additional_backgrounds[0], "data:image/png;base64,AAAA");
     assert.strictEqual(overlay.properties.color_scheme, "system");
+});
+
+test("the overlay waits until the new theme is painted", async () => {
+    // Called too early, theme.getCurrent() still reports the previous theme and
+    // the overlay repaints those old colours in the new slot.
+    const night = {
+        colors: {frame: "#141b1e", toolbar: "#1c1b22"},
+        properties: {color_scheme: "dark"}
+    };
+    const {sandbox, storage, calls} = run({
+        getCurrent: (count) => (count <= 2 ? {} : night)
+    });
+    const noonMs = Date.now() - (Date.now() % 86400000);
+
+    await storage.api.set({
+        "autodarkchangeMode": {mode: "system-theme"},
+        "autodarkdaytimeTheme": {themeId: "my-day@x"},
+        "autodarknighttimeTheme": {themeId: "my-night@x"},
+        "autodarksystemDark": {check: true}
+    });
+
+    vm.runInContext("__fixedNow = " + (noonMs + 12 * 3600000) + "; Date.now = () => __fixedNow;", sandbox);
+    await vm.runInContext("init().then(() => switch_queue)", sandbox);
+
+    assert.ok(calls.getCurrentCount > 2, "the overlay must retry while nothing is painted");
+    const overlay = calls.themeUpdate[calls.themeUpdate.length - 1];
+    assert.deepStrictEqual(overlay.colors, night.colors,
+        "the overlay must snapshot the newly painted theme, not the previous one");
+});
+
+test("no overlay is applied when the theme already follows the OS", async () => {
+    const following = {
+        colors: {frame: "#1c1b22", toolbar: "#1c1b22"},
+        properties: {color_scheme: "system"}
+    };
+    const {sandbox, storage, calls} = run({themeCurrent: following});
+    const noonMs = Date.now() - (Date.now() % 86400000);
+
+    await storage.api.set({
+        "autodarkchangeMode": {mode: "system-theme"},
+        "autodarkdaytimeTheme": {themeId: "my-day@x"},
+        "autodarknighttimeTheme": {themeId: "my-night@x"},
+        "autodarksystemDark": {check: true}
+    });
+
+    vm.runInContext("__fixedNow = " + (noonMs + 12 * 3600000) + "; Date.now = () => __fixedNow;", sandbox);
+    await vm.runInContext("init().then(() => switch_queue)", sandbox);
+
+    assert.strictEqual(calls.themeUpdate.length, 0,
+        "a theme that follows the OS must not be re-sent as an overlay");
+    assert.deepStrictEqual(calls.overrides.slice(-1), ["system"]);
 });

@@ -551,21 +551,45 @@ function resetOverlay() {
     return browser.theme.reset().catch(onError);
 }
 
+// The overlay is a snapshot of whatever theme.getCurrent() reports, so it has
+// to run once the newly enabled theme is actually painted: called too early it
+// snapshots the *previous* theme and repaints the old colours in the new slot
+// ("it switches, but keeps the other theme"). Poll a few times before giving
+// up rather than silently leaving the old colours in place.
+const OVERLAY_PAINT_ATTEMPTS = 6;
+const OVERLAY_PAINT_DELAY_MS = 150;
+
+function paintedTheme(attempt) {
+    return browser.theme.getCurrent().then((current) => {
+        if (current && current.colors) {
+            return current;
+        }
+        if (attempt >= OVERLAY_PAINT_ATTEMPTS) {
+            logDebug("ensureColorSchemeSystem: nothing painted after "
+                + OVERLAY_PAINT_ATTEMPTS + " attempts (built-in theme?).");
+            return null;
+        }
+        return new Promise((resolve) => setTimeout(resolve, OVERLAY_PAINT_DELAY_MS))
+            .then(() => paintedTheme(attempt + 1));
+    });
+}
+
 // Make sure the enabled theme follows the OS, so that the OS signal can still
 // be observed (issues #11, #42, #43, #64).
 function ensureColorSchemeSystem() {
     if (!caps.theme) {
         return Promise.resolve();
     }
-    return browser.theme.getCurrent()
+    return paintedTheme(0)
         .then((current) => {
             if (!current || !current.colors) {
-                // Built-in themes and theme.update() overlays report no colors.
-                // Colors surfacing later means an earlier repaint worked.
+                // Built-in themes report no colors: there is nothing to
+                // snapshot, and they follow the OS on their own.
                 return;
             }
-            if (current.properties && current.properties.color_scheme === "system"
-                && overlay_applied) {
+            // A theme that already follows the OS needs no overlay, and an
+            // overlay we own is already in place.
+            if (current.properties && current.properties.color_scheme === "system") {
                 return;
             }
 
