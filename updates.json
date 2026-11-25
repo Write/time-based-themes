@@ -5,6 +5,7 @@
         {
           "version": "2.0.0",
           "update_link": "https://git.drop.tf/Gliglue/time-based-themes/releases/download/v2.0.0/automaticdark-2.0.0.xpi",
+          "update_hash": "sha256:929503f823bd7761b9464ddcb9e4598658daeb82cebe9b5c2d9a820efba5504a",
           "applications": {
             "gecko": {
               "strict_min_version": "140.0"
